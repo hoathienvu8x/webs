@@ -57,6 +57,11 @@ struct tcp_conn {
   pthread_t run_thread;
   tcp_conn * next;
   tcp_conn * prev;
+  pthread_mutex_t mtx_state;
+  pthread_mutex_t mtx_snd;
+  pthread_mutex_t mtx_ping;
+  uint32_t last_pong_id;
+	uint32_t current_ping_id;
 };
 
 struct tcp_server {
@@ -248,6 +253,10 @@ static int __tcp_sha1(const uint8_t *data, uint8_t *digest, size_t databytes)
   return 0;
 }
 
+static uint32_t __tcp_parse_uint32(uint8_t * msg) {
+  return (msg[3] << 0) | (msg[2] << 8) | (msg[1] << 16) | (msg[0] << 24);
+}
+
 static int __tcp_create_socket(
   const char * host, short port,
   int (*boc)(int, const struct sockaddr *, socklen_t)
@@ -388,7 +397,21 @@ static ssize_t __tcp_conn_recv(tcp_conn * conn, char * buf, size_t len) {
 }
 
 static ssize_t __tcp_conn_send(tcp_conn * conn, const char * buf, size_t len) {
-  return send(conn->fd, buf, len, 0);
+  const char * p = buf;
+  ssize_t ret = 0, r;
+  pthread_mutex_lock(&conn->mtx_snd);
+  while (len) {
+    r = send(conn->fd, p, len, 0);
+    if (r == -1) {
+      pthread_mutex_unlock(&conn->mtx_snd);
+      return -1;
+    }
+    p += r;
+    len -= r;
+    ret += r;
+  }
+  pthread_mutex_unlock(&conn->mtx_snd);
+  return ret;
 }
 
 static int __tcp_is_control_frame(int opcode) {
@@ -489,7 +512,10 @@ static char * __tcp_make_frame(
 }
 
 static void __tcp_conn_set_state(tcp_conn * conn, int state) {
+  if (state < 0 || state > 3) return;
+  pthread_mutex_lock(&conn->mtx_state);
   conn->state = state;
+  pthread_mutex_unlock(&conn->mtx_state);
 }
 
 static tcp_conn * __tcp_server_add_node(tcp_server * srv, tcp_conn * node) {
@@ -526,7 +552,31 @@ static int __tcp_accept_connection(int fd, tcp_conn * c) {
   static size_t tcp_conn_counter = 0;
   socklen_t len = sizeof(c->addr);
   c->fd = accept(fd, (struct sockaddr *)&c->addr, &len);
-  if (c->fd < 0) return -1;
+  if (c->fd < 0) {
+    __tcp_panic("Error on accepting connections...");
+  }
+
+  c->last_pong_id = -1;
+  c->current_ping_id = -1;
+
+  if (pthread_mutex_init(&c->mtx_state, NULL)) {
+    __tcp_close_socket(c->fd);
+    __tcp_debug_info("pthread_mutex_init(mtx_state)");
+    return -1;
+  }
+
+  if (pthread_mutex_init(&c->mtx_snd, NULL)) {
+    __tcp_close_socket(c->fd);
+    __tcp_debug_info("pthread_mutex_init(mtx_snd)");
+    return -1;
+  }
+
+  if (pthread_mutex_init(&c->mtx_ping, NULL)) {
+    __tcp_close_socket(c->fd);
+    __tcp_debug_info("pthread_mutex_init(mtx_ping)");
+    return -1;
+  }
+
   c->id = tcp_conn_counter++;
   return c->fd;
 }
@@ -618,14 +668,12 @@ static void * __tcp_conn_main(void * self) {
       continue;
     }
 
-    if ((size_t)frm.length > SSIZE_MAX) {
-      continue;
+    if (opcode == WS_FR_OP_PING || opcode == WS_FR_OP_PONG || opcode == WS_FR_OP_CLSE) {
+      if (frm.length > 125) break;
     }
 
-    if (opcode == WS_FR_OP_PING) {
-      // Pong
-    } else if (opcode == WS_FR_OP_PONG) {
-      // on pong
+    if ((size_t)frm.length > SSIZE_MAX) {
+      continue;
     }
 
     if (opcode != WS_FR_OP_CONT) {
@@ -686,14 +734,57 @@ static void * __tcp_conn_main(void * self) {
     }
 
     if (opcode == WS_FR_OP_CLSE) {
-      // Send close
+      if (tcp_conn_get_state(conn) != WS_STATE_CLOSING) {
+        __tcp_conn_set_state(conn, WS_STATE_CLOSING);
+      }
+      int cc = -1;
+      if (frm.length == 1) {
+        cc = data[0];
+      } else if (frm.length == 2) {
+        cc = ((int)data[0] << 8) | data[1];
+      }
+      char * payload = NULL;
+      if (cc < 0) {
+        payload = __tcp_make_frame(data, frm.length, WS_FR_OP_CLSE, 0);
+      } else {
+        char m[2] = { (cc >> 8), (cc & 0xff) };
+        payload = __tcp_make_frame(m, sizeof(m), WS_FR_OP_CLSE, 0);
+      }
+      free(data);
+      if (!payload) {        
+        (void)__tcp_conn_send(conn, payload, strlen(payload));
+        free(payload);
+      }
       break;
     }
 
     data[total] = '\0';
 
-    if (conn->srv && *conn->srv->ondata) {
-      (*conn->srv->ondata)(conn, (const unsigned char *)data, total, opcode);
+    if (opcode == WS_FR_OP_PING) {
+      char * payload = __tcp_make_frame(data, frm.length, WS_FR_OP_PONG, 0);
+      if (!payload) {
+        free(data);
+        goto CLOSING;
+      }
+      if (__tcp_conn_send(conn, payload, strlen(payload)) < 0) {
+        free(data);
+        free(payload);
+        goto CLOSING;
+      }
+      free(payload);
+    } else if (opcode == WS_FR_OP_PONG) {
+      if (frm.length == sizeof(conn->last_pong_id)) {
+        pthread_mutex_lock(&conn->mtx_ping);
+        uint32_t pong_id = __tcp_parse_uint32((uint8_t *)data);
+        if (pong_id > 0 && pong_id < conn->current_ping_id) {
+          conn->last_pong_id = pong_id;
+        }
+        pthread_mutex_unlock(&conn->mtx_ping);
+      }
+    } else {
+      if (conn->srv && *conn->srv->ondata) {
+        (*conn->srv->ondata)(conn, (const unsigned char *)data, total, opcode);
+      }
     }
 
     free(data);
@@ -701,7 +792,6 @@ static void * __tcp_conn_main(void * self) {
   }
 
 CLOSING:
-  __tcp_conn_set_state(conn, WS_STATE_CLOSING);
   if (conn->srv && *conn->srv->onclose) {
     (*conn->srv->onclose)(conn);
   }
@@ -709,6 +799,11 @@ CLOSING:
 
 ABORT:
   __tcp_close_socket(conn->fd);
+
+  pthread_mutex_destroy(&conn->mtx_state);
+  pthread_mutex_destroy(&conn->mtx_snd);
+  pthread_mutex_destroy(&conn->mtx_ping);
+
   __tcp_server_remove_node(conn);
 
   return self;
@@ -727,7 +822,9 @@ static void * __tcp_server_main(void * self) {
       if (c->fd > 0) {
         c->srv = srv;
         __tcp_server_add_node(srv, c);
-        pthread_create(&c->run_thread, NULL, __tcp_conn_main, c);
+        if (pthread_create(&c->run_thread, NULL, __tcp_conn_main, c)) {
+          __tcp_panic("Could not create client thread!");
+        }
       }
     }
   }
@@ -772,7 +869,9 @@ void tcp_server_start(tcp_server * srv, int thread_loop) {
   srv->stop = 0;
 
   if (thread_loop) {
-    pthread_create(&srv->run_thread, NULL, __tcp_server_main, srv);
+    if (pthread_create(&srv->run_thread, NULL, __tcp_server_main, srv)) {
+      __tcp_panic("Could not create server thread!");
+    }
   } else {
     (void)__tcp_server_main(srv);
   }
@@ -843,7 +942,13 @@ void tcp_server_close(tcp_conn * conn, int code, const char * reason) {
   if (tcp_conn_get_state(conn) != WS_STATE_CLOSING) {
     __tcp_conn_set_state(conn, WS_STATE_CLOSING);
   }
-  char * frm = __tcp_make_frame(reason, reason ? strlen(reason) : 0, code, 0);
+  char * frm = NULL;
+  if (!reason) {
+    uint8_t cc[2] = { ((uint64_t)WS_CLSE_NORMAL >> 8), ((uint64_t)WS_CLSE_NORMAL & 0xff) };
+    frm = __tcp_make_frame((const char *)cc, sizeof(cc), code, 0);
+  } else {
+    frm = __tcp_make_frame(reason, strlen(reason), code, 0);
+  }
   if (!frm) goto done;
   (void)__tcp_conn_send(conn, frm, strlen(frm));
   free(frm);
@@ -857,6 +962,12 @@ done:
     pthread_cancel(conn->run_thread);
   }
   __tcp_conn_set_state(conn, WS_STATE_CLOSED);
+
+  pthread_mutex_destroy(&conn->mtx_state);
+  pthread_mutex_destroy(&conn->mtx_snd);
+  pthread_mutex_destroy(&conn->mtx_ping);
+
+  __tcp_server_remove_node(conn);
 }
 void tcp_server_send(tcp_conn * conn, const unsigned char * data, int opcode) {
   if (tcp_conn_get_state(conn) != WS_STATE_OPEN) return;
@@ -902,9 +1013,12 @@ void tcp_server_sendall(
   free(frm);
 }
 
-int tcp_conn_get_state(const tcp_conn * conn) {
+int tcp_conn_get_state(tcp_conn * conn) {
   if (!conn) return WS_STATE_CLOSED;
-  return conn->state;
+  pthread_mutex_lock(&conn->mtx_state);
+  int state = conn->state;
+  pthread_mutex_unlock(&conn->mtx_state);
+  return state;
 }
 size_t tcp_conn_get_id(const tcp_conn * conn) {
   if (!conn) return 0;

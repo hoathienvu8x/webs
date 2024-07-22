@@ -62,7 +62,7 @@ void tcp_server_sendall(
   tcp_server * srv, const unsigned char * data, int opcode
 );
 
-int tcp_conn_get_state(const tcp_conn * conn);
+int tcp_conn_get_state(tcp_conn * conn);
 size_t tcp_conn_get_id(const tcp_conn * conn);
 void * tcp_conn_get_context(const tcp_conn * conn);
 
