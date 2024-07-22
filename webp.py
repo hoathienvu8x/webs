@@ -75,19 +75,8 @@ class HTTPWebSocketsHandler(SimpleHTTPRequestHandler):
       # SimpleHTTPRequestHandler.handle(self)
     # except (socket.error, TypeError) as err:
       # self.log_message("handle(): Exception: in SimpleHTTPRequestHandler.handle(): %s" % str(err.args))
-
-  def checkAuthentication(self):
-    auth = self.headers.get('Authorization')
-    if auth != "Basic %s" % self.server.auth:
-      self.send_response(401)
-      self.send_header("WWW-Authenticate", 'Basic realm="Plugwise"')
-      self.end_headers();
-      return False
-    return True
     
   def do_GET(self):
-    if self.server.auth and not self.checkAuthentication():
-      return
     if self.headers.get("Upgrade", None) == "websocket":
       self._handshake()
       #This handler is in websocket mode now.
@@ -100,7 +89,7 @@ class HTTPWebSocketsHandler(SimpleHTTPRequestHandler):
     while self.connected == True:
       try:
         self._read_next_message()
-      except (socket.error, WebSocketError), e:
+      except (socket.error, WebSocketError) as e:
         #websocket content error, time-out or disconnect.
         self.log_message("RCV: Close connection: Socket Error %s" % str(e.args))
         self._ws_close()
@@ -148,7 +137,7 @@ class HTTPWebSocketsHandler(SimpleHTTPRequestHandler):
         self.request.send(struct.pack(">Q", length))
       if length > 0:
         self.request.send(message)
-    except socket.error, e:
+    except socket.error as e:
       #websocket content error, time-out or disconnect.
       self.log_message("SND: Close connection: Socket Error %s" % str(e.args))
       self._ws_close()
@@ -158,11 +147,14 @@ class HTTPWebSocketsHandler(SimpleHTTPRequestHandler):
       self._ws_close()
 
   def _handshake(self):
-    headers=self.headers
+    headers = self.headers
     if headers.get("Upgrade", None) != "websocket":
       return
     key = headers['Sec-WebSocket-Key']
-    digest = b64encode(sha1(key + self._ws_GUID).hexdigest().decode('hex'))
+    key += self._ws_GUID
+    h = sha1()
+    h.update(key.encode())
+    digest = b64encode(h.digest()).decode()
     self.send_response(101, 'Switching Protocols')
     self.send_header('Upgrade', 'websocket')
     self.send_header('Connection', 'Upgrade')
