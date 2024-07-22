@@ -23,7 +23,7 @@
 #define MAGIC_STRING   "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 #ifndef SSIZE_MAX
-  #define SSIZE_MAX ( (~((size_t) 0)) >> 1 )
+  #define SSIZE_MAX ((~((size_t) 0)) >> 1)
 #endif
 
 #define __tcp_get_length(h) (((uint8_t *)&h)[1] & 0x7f)
@@ -31,6 +31,15 @@
 #define __tcp_get_masked(h) (((uint8_t *)&h)[1] & 0x80)
 #define __tcp_get_finish(h) (((uint8_t *)&h)[0] & 0x80)
 #define __tcp_get_resvrd(h) (((uint8_t *)&h)[0] & 0x70)
+
+#define __tcp_panic(s) do { perror(s); exit(-1); } while (0)
+#ifndef NDEBUG
+  #define __tcp_debug(...) fprintf(stderr, __VA_ARGS__)
+  #define __tcp_debug_info(s) perror(s)
+#else
+  #define __tcp_debug(...)
+  #define __tcp_debug_info(s)
+#endif
 
 struct tcp_buffer {
   char data[MESSAGE_LENGTH];
@@ -90,6 +99,7 @@ struct tcp_frame {
 };
 
 static int __tcp_close_socket(int fd) {
+  shutdown(fd, SHUT_RDWR);
   return close(fd);
 }
 
@@ -153,8 +163,10 @@ static int __tcp_sha1(const uint8_t *data, uint8_t *digest, size_t databytes)
   uint32_t tailbytes = 64 * loopcount - databytes;
   uint8_t datatail[128] = {0};
 
-  if (!digest || !data)
+  if (!digest || !data) {
+    __tcp_debug("digest or data is null\n");
     return -1;
+  }
 
   datatail[0] = 0x80;
   datatail[tailbytes - 8] = (uint8_t) (databits >> 56 & 0xFF);
@@ -252,16 +264,12 @@ static int __tcp_create_socket(
 
   ret = snprintf(sport, sizeof(sport) - 1, "%d", port);
   if (ret <= 0) {
-    #ifndef NDEBUG
-    perror("snprintf(port) ");
-    #endif
+    __tcp_debug_info("snprintf(port) ");
     return -1;
   }
 
   if (getaddrinfo(host, sport, &hints, &results) != 0) {
-    #ifndef NDEBUG
-    perror("getaddrinfo(port) ");
-    #endif
+    __tcp_debug_info("getaddrinfo(port) ");
     return -1;
   }
 
@@ -277,9 +285,7 @@ static int __tcp_create_socket(
 
   freeaddrinfo(results);
   if (p == NULL) {
-    #ifndef NDEBUG
-    printf("No port to bind\n");
-    #endif
+    __tcp_debug("No port to bind\n");
     return -1;
   }
   return sockfd;
@@ -337,7 +343,7 @@ static int __tcp_parse_request(const char * s, struct http_request * req) {
   int socket_ver = 0, socket_key = 0, socket_update = 0;
   while(*p && __tcp_get_line(p, line) > 0) {
     struct http_header * hr = malloc(sizeof(struct http_header));
-    if (!hr) exit(0);
+    if (!hr) __tcp_panic("Failed to allocated memory!\n");
     if (__tcp_parse_header(line, hr) == 0) {
       hr->next = NULL;
       if(req->hdrs == NULL) {
@@ -372,7 +378,7 @@ static ssize_t __tcp_conn_recv(tcp_conn * conn, char * buf, size_t len) {
   for (; i < len; i++) {
     if (conn->buf.pos == 0 || conn->buf.pos == conn->buf.length) {
       ssize_t n = recv(conn->fd, conn->buf.data, sizeof(conn->buf.data), 0);
-      if (n <= 0) return n;
+      if (n <= 0) return -1;
       conn->buf.pos = 0;
       conn->buf.length = (size_t)n;
     }
@@ -411,7 +417,10 @@ static int __tcp_conn_handshake(tcp_conn * conn, const char * key) {
     "Connection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", buf
   );
 
-  if (rc <= 0) return -1;
+  if (rc <= 0) {
+    __tcp_debug("snprintf(handshake) ");
+    return -1;
+  }
   s[rc] = '\0';
   rc = __tcp_conn_send(conn, s, strlen(s));
   if (rc < 0) return -1;
@@ -436,7 +445,10 @@ static char * __tcp_make_frame(
     payload_length += 4;
   }
   unsigned char * payload = malloc((payload_length + 1) * sizeof(unsigned char));
-  if(!payload) return NULL;
+  if(!payload) {
+    __tcp_debug("Failed to allocated memory!\n");
+    return NULL;
+  }
   short data_start = 2;
   uint64_t length = (uint64_t)n;
   payload[0] = (0x80 | op);
@@ -620,15 +632,16 @@ static void * __tcp_conn_main(void * self) {
       if (data) free(data);
       data = malloc(frm.length + 1);
       if (!data) {
-        #ifndef NDEBUG
-        printf("Failed to allocate memory!\n");
-        #endif
-        exit(ENOMEM);
+        __tcp_panic("Failed to allocate memory!\n");
       }
 
       ssize_t z = 0;
       do {
         n = __tcp_conn_recv(conn, data + z, frm.length - z);
+        if (n < 0) {
+          free(data);
+          goto CLOSING;
+        }
         if (n > 0) z += n;
       } while (n > 0 || z < (ssize_t)frm.length);
       total = frm.length;
@@ -644,15 +657,16 @@ static void * __tcp_conn_main(void * self) {
     } else if (cont == 1) {
       data = realloc(data, total + frm.length + 1);
       if (!data) {
-        #ifndef NDEBUG
-        printf("Failed to reallocate memory!\n");
-        #endif
-        exit(ENOMEM);
+        __tcp_panic("Failed to reallocate memory!\n");
       }
 
       ssize_t z = 0;
       do {
         n = __tcp_conn_recv(conn, data + total + z, frm.length - z);
+        if (n < 0) {
+          free(data);
+          goto CLOSING;
+        }
         if (n > 0) z += n;
       } while (n > 0 || z < (ssize_t)frm.length);
 
@@ -686,6 +700,7 @@ static void * __tcp_conn_main(void * self) {
     data = NULL;
   }
 
+CLOSING:
   __tcp_conn_set_state(conn, WS_STATE_CLOSING);
   if (conn->srv && *conn->srv->onclose) {
     (*conn->srv->onclose)(conn);
@@ -723,7 +738,10 @@ static void * __tcp_server_main(void * self) {
 tcp_server * create_tcp_server(short port, void * data) {
   static size_t tcp_server_counter = 0;
   tcp_server * srv = malloc(sizeof(struct tcp_server));
-  if (!srv) return NULL;
+  if (!srv) {
+    __tcp_debug("Failed to allocate memory\n");
+    return NULL;
+  }
 
   srv->fd = __tcp_create_socket(NULL, port, bind);
   if (srv->fd <= 0) {
