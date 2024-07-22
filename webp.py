@@ -29,6 +29,7 @@ import uuid
 import time
 import logging
 import traceback
+import json
 
 from SimpleHTTPServer import SimpleHTTPRequestHandler
 from SocketServer import ThreadingMixIn
@@ -40,6 +41,53 @@ from mimetools import Message
 from StringIO import StringIO
 import errno, socket #for socket exceptions
 import threading
+
+def json_encode(o):
+  return json.dumps(o, ensure_ascii=False)
+
+def json_decode(s):
+  try:
+    return json.loads(s)
+  except:
+    return None
+
+def to_number(s):
+  try:
+    return float(s)
+  except:
+    return 0
+
+webp_config = {
+  "port":8900,
+  "stream":"wss://streaming.forexpros.com/echo/783/8t4hwg0n/websocket",
+  "uuid":"255768773",
+  "tzID":"110",
+  "symbols": [
+    {
+      "name":"RMU24",
+      "pid":"8911"
+    },
+    {
+      "name":"KCU24",
+      "pid":"8832"
+    }
+  ],
+  "period": 10,
+  "liffe": {
+    "name": "London",
+    "open":"15:00",
+    "close":"23:30"
+  },
+  "ice": {
+    "name": "New York",
+    "open":"15:15",
+    "close":"00:30"
+  }
+}
+
+symbol_trans = {}
+m_last_changed = {}
+
 
 class WebSocketError(Exception):
   pass
@@ -1114,10 +1162,86 @@ def _ws_main(port):
     print(' received, shutting down server')
     server.socket.close()
 
-if __name__ == '__main__':
-  if len(sys.argv) > 1:
-    port = int(sys.argv[1])
-  else:
-    port = 8000
+def on_open(ws):
+  print("Connected")
 
-  _ws_main(port)
+def on_message(ws, message):
+  global symbol_trans, m_last_changed
+  if message == "o":
+    ev = {
+      "_event":"bulk-subscribe",
+      "tzID":webp_config["tzID"]
+    }
+    s = ""
+    for it in webp_config["symbols"]:
+      symbol_trans[it['pid']] = it['name']
+      m_last_changed[it['pid']] = 0
+      if len(s) > 0:
+        s += "%%"
+      s += "isOpenPair-%s:" % it["pid"]
+      s += "%spid-%s:" % ('%%', it["pid"])
+      s += "%spidExt-%s:" % ('%%', it["pid"])
+
+    ev["message"] = s
+
+    a = [json_encode(ev)]
+    ws.send(json_encode(a))
+    ws.send(json_encode([json_encode({"_event":"UID","UID":webp_config["uuid"]})]))
+    return
+
+  if message[0] != 'a':
+    return
+
+  if 'heartbeat' in message:
+    return
+
+  obj = json_decode(message[1:])
+
+  if not isinstance(obj, list) or len(obj) == 0 or not isinstance(obj[0], (unicode,str)):
+    return
+
+  raw = obj[0].decode('string_escape')
+  if '::{' in raw:
+    raw = raw[raw.index('::{') + 2:]
+    raw = raw[:-2]
+
+  o = json_decode(raw)
+
+  if not o:
+    return
+
+  if 'last_numeric' not in o and 'last' not in o or 'pid' not in o \
+    or 'timestamp' not in o:
+    return
+
+  last = o['last_numeric'] if 'last_numeric' in o else to_number(o['last'])
+  if last <= 0:
+    return
+
+  if o['pid'] not in symbol_trans:
+    return
+
+  if m_last_changed[o['pid']] != last:
+    m_last_changed[o['pid']] = last
+    sym = {
+      'name':symbol_trans[o['pid']],
+      'last':last,
+      'timestamp':o['timestamp']
+    }
+    print(sym)
+
+def ws_client_start(cfg):
+  enableTrace(False)
+  ws = WebSocketApp(
+    cfg["stream"],
+    on_open = on_open,
+    on_message = on_message
+  )
+  ws.run_forever()
+
+if __name__ == '__main__':
+  th = threading.Thread(target=ws_client_start, args=(webp_config,))
+  th.setDaemon(True)
+  th.start()
+
+  _ws_main(webp_config["port"])
