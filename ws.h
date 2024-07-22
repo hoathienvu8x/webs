@@ -41,14 +41,26 @@ size_t tcp_server_get_id(const tcp_server * srv);
 void * tcp_server_get_context(const tcp_server * srv);
 
 void tcp_server_onopen(tcp_server * srv, void (*onopen)(tcp_conn *));
-void tcp_server_ondata(tcp_server * srv, void (*ondata)(tcp_conn *, const unsigned char *, size_t, int));
+void tcp_server_ondata(
+  tcp_server * srv, void (*ondata)(
+    tcp_conn *, const unsigned char *, size_t, int
+  )
+);
 void tcp_server_onclose(tcp_server * srv, void (*onclose)(tcp_conn *));
-void tcp_server_dispatch(tcp_server * srv, int (*dispatch)(tcp_conn *, const char *));
+void tcp_server_dispatch(
+  tcp_server * srv, int (*dispatch)(tcp_conn *, const char *)
+);
 
 void tcp_server_close(tcp_conn * conn, int code, const char * reason);
-void tcp_server_send(tcp_conn * conn, const unsigned char * data, int opcode);
-void tcp_server_boadcast(tcp_conn * conn, const unsigned char * data, int opcode);
-void tcp_server_sendall(tcp_server * srv, const unsigned char * data, int opcode);
+void tcp_server_send(
+  tcp_conn * conn, const unsigned char * data, int opcode
+);
+void tcp_server_boadcast(
+  tcp_conn * conn, const unsigned char * data, int opcode
+);
+void tcp_server_sendall(
+  tcp_server * srv, const unsigned char * data, int opcode
+);
 
 int tcp_conn_get_state(const tcp_conn * conn);
 size_t tcp_conn_get_id(const tcp_conn * conn);

@@ -22,6 +22,16 @@
 #define MESSAGE_LENGTH 2048
 #define MAGIC_STRING   "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+#ifndef SSIZE_MAX
+  #define SSIZE_MAX ( (~((size_t) 0)) >> 1 )
+#endif
+
+#define __tcp_get_length(h) (((uint8_t *)&h)[1] & 0x7f)
+#define __tcp_get_opcode(h) (((uint8_t *)&h)[0] & 0x0f)
+#define __tcp_get_masked(h) (((uint8_t *)&h)[1] & 0x80)
+#define __tcp_get_finish(h) (((uint8_t *)&h)[0] & 0x80)
+#define __tcp_get_resvrd(h) (((uint8_t *)&h)[0] & 0x70)
+
 struct tcp_buffer {
   char data[MESSAGE_LENGTH];
   size_t pos;
@@ -71,6 +81,12 @@ struct http_request {
   char * payload;
   size_t payload_length;
   int is_update;
+};
+
+struct tcp_frame {
+  uint64_t length;
+  uint32_t key;
+  uint16_t info;
 };
 
 static int __tcp_close_socket(int fd) {
@@ -369,6 +385,17 @@ static ssize_t __tcp_conn_send(tcp_conn * conn, const char * buf, size_t len) {
   return send(conn->fd, buf, len, 0);
 }
 
+static int __tcp_is_control_frame(int opcode) {
+  if (
+    opcode == WS_FR_OP_CONT || opcode == WS_FR_OP_TXT ||
+    opcode == WS_FR_OP_BIN || opcode == WS_FR_OP_CLSE ||
+    opcode == WS_FR_OP_PING || opcode == WS_FR_OP_PONG
+  ) {
+    return 1;
+  }
+  return 0;
+}
+
 static int __tcp_conn_handshake(tcp_conn * conn, const char * key) {
   char buf[80] = {0}, hash[21] = {0}, s[1024] = {0};
   strcat(buf, key);
@@ -492,13 +519,47 @@ static int __tcp_accept_connection(int fd, tcp_conn * c) {
   return c->fd;
 }
 
+static int __tcp_conn_parse_frame(tcp_conn * conn, struct tcp_frame * frm) {
+  ssize_t ret;
+  char buf[10] = {0};
+  ret = __tcp_conn_recv(conn, (char *)&frm->info, 2);
+  if (ret < 2) return -1;
+  uint64_t frame_length = __tcp_get_length(frm->info);
+  if (frame_length == 126) {
+    ret = __tcp_conn_recv(conn, buf, 2);
+    if (ret < 2) return -1;
+    frm->length = ((uint64_t)buf[0] << 8) | buf[1];
+  } else if (frame_length == 127) {
+    ret = __tcp_conn_recv(conn, buf, 8);
+    if (ret < 8) return -1;
+    frm->length = (
+      ((uint64_t)buf[0] << 56) | ((uint64_t)buf[1] << 48) |
+      ((uint64_t)buf[2] << 40) | ((uint64_t)buf[3] << 32) |
+      ((uint64_t)buf[4] << 24) | ((uint64_t)buf[5] << 16) |
+      ((uint64_t)buf[6] << 8) | buf[7]
+    );
+  } else {
+    frm->length = frame_length;
+  }
+  if (__tcp_get_masked(frm->info)) {
+    ret = __tcp_conn_recv(conn, (char *)&frm->key, 4);
+    if (ret < 4) return -1;
+  }
+  if (__tcp_get_resvrd(frm->info)) return -1;
+  return 0;
+}
+
 static void * __tcp_conn_main(void * self) {
   tcp_conn * conn = (tcp_conn *)self;
 
   char buf[4096] = {0};
   ssize_t n = 0, len = 0;
+  uint64_t total = 0;
+  int cont = 0;
   struct http_request req;
   struct http_header * hdr;
+  struct tcp_frame frm;
+  char * data = NULL;
   do {
     n = __tcp_conn_recv(conn, buf + len, 1);
     len += n;
@@ -535,6 +596,94 @@ static void * __tcp_conn_main(void * self) {
 
   for (;;) {
     if (conn->srv && conn->srv->stop) break;
+
+    if (__tcp_conn_parse_frame(conn, &frm) < 0) {
+      break;
+    }
+    
+    int opcode = __tcp_get_opcode(frm.info);
+    if (!__tcp_is_control_frame(opcode)) {
+      continue;
+    }
+
+    if ((size_t)frm.length > SSIZE_MAX) {
+      continue;
+    }
+
+    if (opcode == WS_FR_OP_PING) {
+      // Pong
+    } else if (opcode == WS_FR_OP_PONG) {
+      // on pong
+    }
+
+    if (opcode != WS_FR_OP_CONT) {
+      if (data) free(data);
+      data = malloc(frm.length + 1);
+      if (!data) {
+        #ifndef NDEBUG
+        printf("Failed to allocate memory!\n");
+        #endif
+        exit(ENOMEM);
+      }
+
+      ssize_t z = 0;
+      do {
+        n = __tcp_conn_recv(conn, data + z, frm.length - z);
+        if (n > 0) z += n;
+      } while (n > 0 || z < (ssize_t)frm.length);
+      total = frm.length;
+
+      if (__tcp_get_masked(frm.info)) {
+        __tcp_mask_data(data, frm.key, frm.length);
+      }
+
+      if (!__tcp_get_finish(frm.info)) {
+        cont = 1;
+        continue;
+      }
+    } else if (cont == 1) {
+      data = realloc(data, total + frm.length + 1);
+      if (!data) {
+        #ifndef NDEBUG
+        printf("Failed to reallocate memory!\n");
+        #endif
+        exit(ENOMEM);
+      }
+
+      ssize_t z = 0;
+      do {
+        n = __tcp_conn_recv(conn, data + total + z, frm.length - z);
+        if (n > 0) z += n;
+      } while (n > 0 || z < (ssize_t)frm.length);
+
+      if (__tcp_get_masked(frm.info)) {
+        __tcp_mask_data(data + total, frm.key, frm.length);
+      }
+
+      total += frm.length;
+
+      if (!__tcp_get_finish(frm.info)) {
+        continue;
+      }
+
+      cont = 0;
+    } else {
+      continue;
+    }
+
+    if (opcode == WS_FR_OP_CLSE) {
+      // Send close
+      break;
+    }
+
+    data[total] = '\0';
+
+    if (conn->srv && *conn->srv->ondata) {
+      (*conn->srv->ondata)(conn, (const unsigned char *)data, total, opcode);
+    }
+
+    free(data);
+    data = NULL;
   }
 
   __tcp_conn_set_state(conn, WS_STATE_CLOSING);
@@ -652,7 +801,11 @@ void tcp_server_onopen(tcp_server * srv, void (*onopen)(tcp_conn *)) {
   if (!srv) return;
   srv->onopen = onopen;
 }
-void tcp_server_ondata(tcp_server * srv, void (*ondata)(tcp_conn *, const unsigned char *, size_t, int)) {
+void tcp_server_ondata(
+  tcp_server * srv, void (*ondata)(
+    tcp_conn *, const unsigned char *, size_t, int
+  )
+) {
   if (!srv) return;
   srv->ondata = ondata;
 }
@@ -660,7 +813,9 @@ void tcp_server_onclose(tcp_server * srv, void (*onclose)(tcp_conn *)) {
   if (!srv) return;
   srv->onclose = onclose;
 }
-void tcp_server_dispatch(tcp_server * srv, int (*dispatch)(tcp_conn *, const char *)) {
+void tcp_server_dispatch(
+  tcp_server * srv, int (*dispatch)(tcp_conn *, const char *)
+) {
   if (!srv) return;
   srv->dispatch = dispatch;
 }
@@ -687,14 +842,18 @@ done:
 }
 void tcp_server_send(tcp_conn * conn, const unsigned char * data, int opcode) {
   if (tcp_conn_get_state(conn) != WS_STATE_OPEN) return;
-  char * frm = __tcp_make_frame((const char *)data, data ? strlen((char *)data) : 0, opcode, 0);
+  char * frm = __tcp_make_frame(
+    (const char *)data, data ? strlen((char *)data) : 0, opcode, 0
+  );
   if (!frm) return;
   (void)__tcp_conn_send(conn, frm, strlen(frm));
   free(frm);
 }
 void tcp_server_boadcast(tcp_conn * conn, const unsigned char * data, int opcode) {
   if (!conn || !conn->srv) return;
-  char * frm = __tcp_make_frame((const char *)data, data ? strlen((char *)data) : 0, opcode, 0);
+  char * frm = __tcp_make_frame(
+    (const char *)data, data ? strlen((char *)data) : 0, opcode, 0
+  );
   if (!frm) return;
   size_t len = strlen(frm);
   tcp_conn * node = conn->srv->conns;
@@ -706,9 +865,13 @@ void tcp_server_boadcast(tcp_conn * conn, const unsigned char * data, int opcode
   }
   free(frm);
 }
-void tcp_server_sendall(tcp_server * srv, const unsigned char * data, int opcode) {
+void tcp_server_sendall(
+  tcp_server * srv, const unsigned char * data, int opcode
+) {
   if (srv) return;
-  char * frm = __tcp_make_frame((const char *)data, data ? strlen((char *)data) : 0, opcode, 0);
+  char * frm = __tcp_make_frame(
+    (const char *)data, data ? strlen((char *)data) : 0, opcode, 0
+  );
   if (!frm) return;
   size_t len = strlen(frm);
   tcp_conn * node = srv->conns;
