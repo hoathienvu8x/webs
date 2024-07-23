@@ -23,6 +23,7 @@ except ImportError:
   HAVE_SSL = False
 
 from urlparse import urlparse
+import re
 import os
 import array
 import uuid
@@ -88,7 +89,6 @@ webp_config = {
 symbol_trans = {}
 m_last_changed = {}
 
-
 class WebSocketError(Exception):
   pass
 
@@ -143,12 +143,37 @@ class HTTPWebSocketsHandler(SimpleHTTPRequestHandler):
       # self.log_message("handle(): Exception: in SimpleHTTPRequestHandler.handle(): %s" % str(err.args))
     
   def do_GET(self):
-    if self._handshake():
-      #This handler is in websocket mode now.
-      #do_GET only returns after client close or socket error.
-      self._read_messages()
-    else:
-      SimpleHTTPRequestHandler.do_GET(self)
+    self.handle_method('GET')
+
+  def do_HEAD(self):
+    self.handle_method('HEAD')
+
+  def do_POST(self):
+    self.handle_method('POST')
+
+  def do_PUT(self):
+    self.handle_method('PUT')
+
+  def do_DELETE(self):
+    self.handle_method('DELETE')
+
+  def handle_method(self, method):
+    if re.match(r'^/polling', self.path) and method == 'GET':
+      if self._handshake():
+        self._read_messages()
+      else:
+        self.send_response(403)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write('{"error":"No route"}')
+
+      return
+
+    if re.match(r'^/[?#&]*$', self.path):
+      self.send_response(200)
+      self.send_header('Content-type', 'application/json')
+      self.end_headers()
+      self.wfile.write('{"message":"Hi there"}')
               
   def _read_messages(self):
     while self.connected == True:
@@ -213,8 +238,13 @@ class HTTPWebSocketsHandler(SimpleHTTPRequestHandler):
 
   def _handshake(self):
     headers = self.headers
-    if headers.get("Upgrade", None) != "websocket":
+
+    #if headers.get("Upgrade", None) != "websocket":
+    #  return False
+    
+    if not headers.get("Sec-WebSocket-Key", None):
       return False
+
     key = headers['Sec-WebSocket-Key']
     digest = base64.b64encode(hashlib.sha1(key + self._ws_GUID).hexdigest().decode('hex'))
     self.send_response(101, 'Switching Protocols')
