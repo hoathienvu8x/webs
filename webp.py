@@ -90,6 +90,9 @@ symbol_trans = {}
 m_last_changed = {}
 heartbeat_recv = 0;
 
+mutex_mqtt = threading.Lock()
+mqtt = []
+
 class WebSocketError(Exception):
   pass
 
@@ -105,6 +108,7 @@ class HTTPWebSocketsHandler(SimpleHTTPRequestHandler):
   mutex = threading.Lock()
 
   def __init__(self, req, client_addr, server):
+    self._clients = []
     SimpleHTTPRequestHandler.__init__(self, req, client_addr, server)
 
   def on_ws_message(self, message):
@@ -1223,7 +1227,7 @@ def on_periodic(ws):
     ws.send(s)
 
 def on_message(ws, message):
-  global symbol_trans, m_last_changed, heartbeat_recv
+  global symbol_trans, m_last_changed, heartbeat_recv, mqtt
   if message == "o":
     ev = {
       "_event":"bulk-subscribe",
@@ -1286,7 +1290,8 @@ def on_message(ws, message):
       'last':last,
       'timestamp':o['timestamp']
     }
-    print(sym)
+    with mutex_mqtt:
+      mqtt.append(sym)
 
 def ws_client_start(cfg):
   enableTrace(True)
