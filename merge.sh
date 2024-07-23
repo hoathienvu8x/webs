@@ -238,3 +238,28 @@ sed -i '186,187d' b
 sed -i '178 i\    self._recv_buffer = []' b
 
 sed -i '244,246s/self.rfile.read/self.read_bytes/g' b
+
+sed -i '180 i\  def do_GET(self):' b
+sed -i '181 i\    self.handle_method("GET")\n' b
+
+sed -i '183 i\  def do_HEAD(self):' b
+sed -i '184 i\    self.handle_method("HEAD")\n' b
+
+sed -i '186 i\  def do_POST(self):' b
+sed -i '187 i\    self.handle_method("POST")\n' b
+
+sed -i '189 i\  def do_PUT(self):' b
+sed -i '190 i\    self.handle_method("PUT")\n' b
+
+sed -i '192 i\  def do_DELETE(self):' b
+sed -i '193 i\    self.handle_method("DELETE")\n' b
+
+sed -i '195 i\  def handle_method(self, method):' b
+sed -i '196d' b
+
+sed -i '326,335d' b
+
+sed -i '326 i\    return self.headers' b
+
+sed -i '332s/upgrade/Upgrade/' b
+sed -i '338s/sec-websocket-key/Sec-WebSocket-Key/' b
