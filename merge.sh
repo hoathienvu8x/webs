@@ -90,3 +90,62 @@ sed -i '112s/         O/O/' a
 
 sed -i 's/    /\t/g' a
 sed -i 's/\t/  /g' a
+
+
+sed '53,470d' websocket_server.py | sed '1,50d' | sed '13d' > b
+sed '470,$d' websocket_server.py | sed '1,52d' >> b
+sed -i '68d' b
+sed -i '22d' b
+sed -i '385d' b
+sed -i '382d' b
+sed -i '367d' b
+sed -i '361d' b
+sed -i '356d' b
+sed -i -E '344s/\s+#.*$//' b
+sed -i '337,342d' b
+sed -i '330d' b
+sed -i '315,321d' b
+sed -i -E '257s/\s+#.*$//' b
+sed -i -E '234s/\s+#.*$//' b
+sed -i '210,212d' b
+sed -i '202,204d' b
+sed -i '193,195d' b
+sed -i '184,186d' b
+sed -i '177,179d' b
+sed -i -E '90s/\s+#.*$//' b
+sed -i '68,88d' b
+sed -i '379d' b
+sed -i '190d' b
+sed -i '188d' b
+
+sed -i 's/CLOSE_STATUS_NORMAL/STATUS_NORMAL/g' b
+sed -i '22s/, threaded=False//' b
+sed -i '86s/, threaded//' b
+sed -i -E '96,98s/^    //g' b
+sed -i '90,95d' b
+sed -i '82d' b
+sed -i 's/sha1(/hashlib.sha1(/g' b
+sed -i 's/b64encode(/base64.b64encode/g' b
+
+sed -i 's/OPCODE_CONTINUATION/OPCODE_CONT/g' b
+sed -i 's/OPCODE_CLOSE_CONN/OPCODE_CLOSE/g' b
+sed -i 's/OPCODE_/ABNF.OPCODE_/g' b
+
+sed -i 's/PAYLOAD_LEN/LENGTH_7/g' b
+sed -i 's/PAYLOAD_LEN_EXT16/LENGTH_16/g' b
+sed -i 's/PAYLOAD_LEN_EXT64/LENGTH_63/g' b
+
+sed -i 's/StreamRequestHandler/SimpleHTTPRequestHandler/g' b
+
+sed -i '1 i\FIN    = 0x80' b
+sed -i '2 i\OPCODE = 0x0f' b
+sed -i '3 i\MASKED = 0x80' b
+
+sed -i '92d' b
+sed -i '188,192d' b
+
+sed -i '74s/, key=None, cert=None//' b
+sed -i '79,81d' b
+
+sed -i 's/    /\t/g' b
+sed -i 's/\t/  /g' b

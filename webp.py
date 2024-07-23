@@ -109,6 +109,7 @@ class HTTPWebSocketsHandler(SimpleHTTPRequestHandler):
 
   def __init__(self, req, client_addr, server):
     self._clients = []
+    self._server = server
     SimpleHTTPRequestHandler.__init__(self, req, client_addr, server)
 
   def on_ws_message(self, message):
