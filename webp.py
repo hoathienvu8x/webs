@@ -88,6 +88,7 @@ webp_config = {
 
 symbol_trans = {}
 m_last_changed = {}
+heartbeat_recv = 0;
 
 class WebSocketError(Exception):
   pass
@@ -102,7 +103,10 @@ class HTTPWebSocketsHandler(SimpleHTTPRequestHandler):
   _opcode_pong = 0xa
 
   mutex = threading.Lock()
-  
+
+  def __init__(self, req, client_addr, server):
+    SimpleHTTPRequestHandler.__init__(self, req, client_addr, server)
+
   def on_ws_message(self, message):
     """Override this handler to process incoming websocket messages."""
     pass
@@ -501,7 +505,7 @@ def _create_sec_websocket_key():
 _HEADERS_TO_CHECK = {
   "upgrade": "websocket",
   "connection": "upgrade",
-  }
+}
 
 
 class ABNF(object):
@@ -1056,7 +1060,7 @@ class WebSocketApp(object):
   """
   def __init__(self, url, header=[],
          on_open=None, on_message=None, on_error=None,
-         on_close=None, keep_running=True, get_mask_key=None):
+         on_close=None,on_periodic=None, keep_running=True, get_mask_key=None):
     """
     url: websocket url.
     header: custom header for websocket handshake.
@@ -1083,6 +1087,7 @@ class WebSocketApp(object):
     self.on_message = on_message
     self.on_error = on_error
     self.on_close = on_close
+    self.on_periodic = on_periodic
     self.keep_running = keep_running
     self.get_mask_key = get_mask_key
     self.sock = None
@@ -1111,6 +1116,13 @@ class WebSocketApp(object):
           return
       self.sock.ping()
 
+  def _callperiodic(self):
+    while True:
+      time.sleep(1)
+      if not self.keep_running:
+        return
+      self._callback(self.on_periodic)
+
   def run_forever(self, sockopt=None, sslopt=None, ping_interval=0):
     """
     run event loop for WebSocket framework.
@@ -1128,6 +1140,7 @@ class WebSocketApp(object):
     if self.sock:
       raise WebSocketException("socket is already opened")
     thread = None
+    thread_periodic = None
 
     try:
       self.sock = WebSocket(self.get_mask_key, sockopt=sockopt, sslopt=sslopt)
@@ -1140,6 +1153,11 @@ class WebSocketApp(object):
         thread.setDaemon(True)
         thread.start()
 
+      if self.on_periodic:
+        thread_periodic = threading.Thread(target=self._callperiodic, args=())
+        thread_periodic.setDaemon(True)
+        thread_periodic.start()
+
       while self.keep_running:
         data = self.sock.recv()
         if data is None:
@@ -1148,7 +1166,7 @@ class WebSocketApp(object):
     except Exception, e:
       self._callback(self.on_error, e)
     finally:
-      if thread:
+      if thread or thread_periodic:
         self.keep_running = False
       self.sock.close()
       self._callback(self.on_close)
@@ -1195,8 +1213,17 @@ def _ws_main(port):
 def on_open(ws):
   print("Connected")
 
+def on_periodic(ws):
+  global heartbeat_recv
+  sec = int(time.time())
+  if sec - heartbeat_recv >= 5:
+    heartbeat_recv = sec;
+    s = json_encode([json_encode({'_event':'heartbeat','data':'h'})])
+    print(s)
+    ws.send(s)
+
 def on_message(ws, message):
-  global symbol_trans, m_last_changed
+  global symbol_trans, m_last_changed, heartbeat_recv
   if message == "o":
     ev = {
       "_event":"bulk-subscribe",
@@ -1223,6 +1250,7 @@ def on_message(ws, message):
     return
 
   if 'heartbeat' in message:
+    heartbeat_recv = int(time.time())
     return
 
   obj = json_decode(message[1:])
@@ -1261,11 +1289,12 @@ def on_message(ws, message):
     print(sym)
 
 def ws_client_start(cfg):
-  enableTrace(False)
+  enableTrace(True)
   ws = WebSocketApp(
     cfg["stream"],
     on_open = on_open,
-    on_message = on_message
+    on_message = on_message,
+    on_periodic = on_periodic
   )
   ws.run_forever()
 
