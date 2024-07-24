@@ -102,7 +102,7 @@ sed -i '112s/         O/O/' a
 
 sed -i 's/    /\t/g' a
 sed -i 's/\t/  /g' a
-
+sed -i '295s/"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"/MAGIC_STRING/' a
 
 sed '53,470d' websocket_server.py | sed '1,50d' | sed '13d' > b
 sed '470,$d' websocket_server.py | sed '1,52d' >> b
@@ -137,15 +137,15 @@ sed -i -E '96,98s/^    //g' b
 sed -i '90,95d' b
 sed -i '82d' b
 sed -i 's/sha1(/hashlib.sha1(/g' b
-sed -i 's/b64encode(/base64.b64encode/g' b
+sed -i 's/b64encode(/base64.b64encode(/g' b
 
 sed -i 's/OPCODE_CONTINUATION/OPCODE_CONT/g' b
 sed -i 's/OPCODE_CLOSE_CONN/OPCODE_CLOSE/g' b
 sed -i 's/OPCODE_/ABNF.OPCODE_/g' b
 
-sed -i 's/PAYLOAD_LEN/LENGTH_7/g' b
-sed -i 's/PAYLOAD_LEN_EXT16/LENGTH_16/g' b
-sed -i 's/PAYLOAD_LEN_EXT64/LENGTH_63/g' b
+sed -i 's/PAYLOAD_LEN/ABNF.LENGTH_7/g' b
+sed -i 's/PAYLOAD_LEN_EXT16/ABNF.LENGTH_16/g' b
+sed -i 's/PAYLOAD_LEN_EXT64/ABNF.LENGTH_63/g' b
 
 sed -i 's/StreamRequestHandler/SimpleHTTPRequestHandler/g' b
 
@@ -174,7 +174,7 @@ sed -i '70,184s/_shutdown_abruptly/shutdown_abruptly/g' b
 sed -i '70,184s/_disconnect_clients_gracefully/disconnect_clients_gracefully/g' b
 sed -i '70,184s/_disconnect_clients_abruptly/disconnect_clients_abruptly/g' b
 
-sed -i '186 i\  def _calback(self, callback, *args):' b
+sed -i '186 i\  def _callback(self, callback, *args):' b
 sed -i '187 i\    if callback:' b
 sed -i '188 i\      try:' b
 sed -i '189 i\        callback(*args)' b
@@ -223,16 +223,16 @@ sed -i '157 i\      self._callback(self.on_periodic, self)\n' b
 sed -i '188 i\  def read_bytes(self, bufsize):' b
 sed -i '189 i\    shortage = bufsize - sum(len(x) for x in self._recv_buffer)' b
 sed -i '190 i\    while shortage > 0:' b
-sed -i '191 i\      bytes = elf.rfile.read(shortage)' b
+sed -i '191 i\      bytes = self.rfile.read(shortage)' b
 sed -i '192 i\      self._recv_buffer.append(bytes)' b
 sed -i '193 i\      shortage -= len(bytes)' b
 sed -i '194 i\    unified = "".join(self._recv_buffer)' b
 sed -i '195 i\    if shortage == 0:' b
 sed -i '196 i\      self._recv_buffer = []' b
-sed -i "197 i\      return bytes(unified, 'utf-8')" b
+sed -i "197 i\      return bytearray(unified.encode('utf-8')) # https://stackoverflow.com/a/63211072" b
 sed -i '198 i\    else:' b
 sed -i '199 i\      self._recv_buffer = [unified[bufsize:]]' b
-sed -i "200 i\      return bytes(unified[:bufsize], 'utf-8')" b
+sed -i "200 i\      return bytearray(unified[:bufsize].encode('utf-8'))" b
 sed -i '186,187d' b
 
 sed -i '178 i\    self._recv_buffer = []' b
@@ -263,3 +263,240 @@ sed -i '326 i\    return self.headers' b
 
 sed -i '332s/upgrade/Upgrade/' b
 sed -i '338s/sec-websocket-key/Sec-WebSocket-Key/' b
+
+sed -i '362s/GUID/MAGIC_STRING/' b
+sed -i '362s/hash /_hash /' b
+sed -i '363s/hash/_hash/' b
+sed -i '361d' b
+
+sed -i -E '196,200s/^  /    /g' b
+sed -i '201 i\\n      self.send_response(403)' b
+sed -i '203 i\      self.send_header("Content-type", "application/json")' b
+sed -i '204 i\      self.end_headers()' b
+sed -i '205 i\      self.wfile.write(json_encode({"error":"No route"}))' b
+sed -i '206 i\      return\n' b
+
+sed -i "208 i\    if re.match(r'^/[?#&]*$', self.path):" b
+sed -i '209 i\      self.send_response(200)' b
+sed -i '210 i\      self.send_header("Content-type", "application/json")' b
+sed -i '211 i\      self.end_headers()' b
+sed -i '212 i\      self.wfile.write(json_encode({"message":"Hi there"}))' b
+
+sed -i "196 i\    if re.match(r'^/polling', self.path) and method == 'GET':" b
+
+sed -i '28s/loglevel=logging.WARNING/on_accept=None/' b
+sed -i '29s/on_accept=None, //' b
+sed -i '29s/on_periodic=None,/on_periodic=None, keep_alive=True):/' b
+sed -i '30,31d' b
+
+sed -i -E '4s/bytes.*$/""/' b
+sed -i '290 i\      raise Exception("CLOSE status must be between 1000 and 1015, got %d" % status)' b
+sed -i '289d' b
+
+sed -i '24s/ThreadingMixIn, HTTPServer/HTTPServer, object/' b
+sed -i '55s/super()/super(WebsocketServer, self)/' b
+
+sed '48,$d' websocket.py | sed '30d' | sed '1,22d' | sed 's|    |\t|g' | sed 's|\t|  |g' > c
+sed '12,$d' websocket_server.py | sed '1,9d' >> c
+cat >> c <<EOF
+import json, re
+from SimpleHTTPServer import SimpleHTTPRequestHandler
+from SocketServer import ThreadingMixIn
+from BaseHTTPServer import HTTPServer
+
+EOF
+
+sed '16,$d' a >> c
+sed '6,$d' b >> c
+sed '102,$d' a | sed '92,95d' | sed '16,88d' | sed '1,15d' >> c
+sed '30,$d' a | sed '17,25d' | sed '1,15d' >> c
+cat >> c <<EOF
+webp_config = {
+  "port":8900,
+  "stream":"wss://streaming.forexpros.com/echo/783/8t4hwg0n/websocket",
+  "uuid":"255768773",
+  "tzID":"110",
+  "symbols": [
+    {
+      "name":"RMU24",
+      "pid":"8911"
+    },
+    {
+      "name":"KCU24",
+      "pid":"8832"
+    }
+  ],
+  "period": 10,
+  "liffe": {
+    "name": "London",
+    "open":"15:00",
+    "close":"23:30"
+  },
+  "ice": {
+    "name": "New York",
+    "open":"15:15",
+    "close":"00:30"
+  }
+}
+
+symbol_trans = {}
+m_last_changed = {}
+heartbeat_recv = 0;
+
+mutex_mqtt = threading.Lock()
+mqtt = []
+
+EOF
+sed '24,$d' b | sed '1,5d' >> c
+cat >> c <<EOF
+def json_encode(o):
+  return json.dumps(o, ensure_ascii=False)
+
+def json_decode(s):
+  try:
+    return json.loads(s)
+  except:
+    return None
+
+def to_number(s):
+  try:
+    return float(s)
+  except:
+    return 0
+EOF
+
+sed '189,$d' a | sed '96,100d' | sed '89,92d' | sed '26,28d' | sed '1,16d' >> c
+sed '1,23d' b >> c
+sed '1,187d' a >> c
+
+sed -i '33 i\MAGIC_STRING = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"' c
+
+cat >> c <<EOF
+
+def on_investing_periodic(ws):
+  global heartbeat_recv
+  sec = int(time.time())
+  if sec - heartbeat_recv >= 5:
+    heartbeat_recv = sec;
+    s = json_encode([json_encode({'_event':'heartbeat','data':'h'})])
+    ws.send(s)
+
+def on_investing_data(ws, message):
+  global symbol_trans, m_last_changed, heartbeat_recv, mqtt
+  if message == "o":
+    ev = {
+      "_event":"bulk-subscribe",
+      "tzID":webp_config["tzID"]
+    }
+    s = ""
+    for it in webp_config["symbols"]:
+      symbol_trans[it['pid']] = it['name']
+      m_last_changed[it['pid']] = 0
+      if len(s) > 0:
+        s += "%%"
+      s += "isOpenPair-%s:" % it["pid"]
+      s += "%spid-%s:" % ('%%', it["pid"])
+      s += "%spidExt-%s:" % ('%%', it["pid"])
+
+    ev["message"] = s
+
+    a = [json_encode(ev)]
+    ws.send(json_encode(a))
+    ws.send(json_encode([json_encode({"_event":"UID","UID":webp_config["uuid"]})]))
+    return
+
+  if message[0] != 'a':
+    return
+
+  if 'heartbeat' in message:
+    heartbeat_recv = int(time.time())
+    return
+
+  obj = json_decode(message[1:])
+
+  if not isinstance(obj, list) or len(obj) == 0 or not isinstance(obj[0], (unicode,str)):
+    return
+
+  raw = obj[0].decode('string_escape')
+  if '::{' in raw:
+    raw = raw[raw.index('::{') + 2:]
+    raw = raw[:-2]
+
+  o = json_decode(raw)
+
+  if not o:
+    return
+
+  if 'last_numeric' not in o and 'last' not in o or 'pid' not in o \
+    or 'timestamp' not in o:
+    return
+
+  last = o['last_numeric'] if 'last_numeric' in o else to_number(o['last'])
+  if last <= 0:
+    return
+
+  if o['pid'] not in symbol_trans:
+    return
+
+  if m_last_changed[o['pid']] != last:
+    m_last_changed[o['pid']] = last
+    sym = {
+      'name':symbol_trans[o['pid']],
+      'last':last,
+      'timestamp':o['timestamp']
+    }
+    with mutex_mqtt:
+      mqtt.append(sym)
+
+def start_investing(cfg):
+  try:
+    ws = WebSocketApp(
+      cfg["stream"],
+      on_message = on_investing_data,
+      on_periodic = on_investing_periodic
+    )
+    ws.run_forever()
+  except KeyboardInterrupt:
+    pass
+
+def on_open(ws):
+  print('#%d connected' % ws['id'])
+
+def on_data(ws, message):
+  print('#%d send %s' % (ws['id'], message))
+
+def on_periodic(srv):
+  global mqtt
+  with mutex_mqtt:
+    if len(mqtt) > 0:
+      s = mqtt.pop(0)
+      print(s)
+
+if __name__ == '__main__':
+  enableTrace(True)
+  investing_thread = None
+  try:
+    keep_running = True
+
+    investing_thread = threading.Thread(target=start_investing, args=(webp_config,))
+    investing_thread.setDaemon(True)
+    investing_thread.start()
+
+    server = WebsocketServer(host='127.0.0.1', port=webp_config["port"],
+      on_accept=on_open, on_message=on_data, on_periodic=on_periodic)
+
+    server.run_forever()
+  except KeyboardInterrupt:
+    if investing_thread:
+      keep_running = False
+EOF
+
+cat > d.py <<EOF
+#!/usr/bin/env python
+# coding: utf-8
+
+EOF
+
+cat c >> d.py
+
+sed -i '614,619d' d.py
