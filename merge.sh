@@ -104,6 +104,11 @@ sed -i 's/    /\t/g' a
 sed -i 's/\t/  /g' a
 sed -i '295s/"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"/MAGIC_STRING/' a
 
+sed -i '351s/opcode,/_,/' a
+
+sed -i '145s/opcode/opcode, mask=1/' a
+sed -i '148s/opcode, 1/opcode, mask/' a
+
 sed '53,470d' websocket_server.py | sed '1,50d' | sed '13d' > b
 sed '470,$d' websocket_server.py | sed '1,52d' >> b
 sed -i '68d' b
@@ -226,13 +231,13 @@ sed -i '190 i\    while shortage > 0:' b
 sed -i '191 i\      bytes = self.rfile.read(shortage)' b
 sed -i '192 i\      self._recv_buffer.append(bytes)' b
 sed -i '193 i\      shortage -= len(bytes)' b
-sed -i '194 i\    unified = "".join(self._recv_buffer)' b
+sed -i '194 i\    unified = self._recv_buffer[:]' b
 sed -i '195 i\    if shortage == 0:' b
 sed -i '196 i\      self._recv_buffer = []' b
-sed -i "197 i\      return bytearray(unified.encode('utf-8')) # https://stackoverflow.com/a/63211072" b
+sed -i "197 i\      return unified" b
 sed -i '198 i\    else:' b
-sed -i '199 i\      self._recv_buffer = [unified[bufsize:]]' b
-sed -i "200 i\      return bytearray(unified[:bufsize].encode('utf-8'))" b
+sed -i '199 i\      self._recv_buffer = unified[bufsize:]' b
+sed -i "200 i\      return unified[:bufsize]" b
 sed -i '186,187d' b
 
 sed -i '178 i\    self._recv_buffer = []' b
@@ -461,6 +466,7 @@ def start_investing(cfg):
 
 def on_open(ws):
   print('#%d connected' % ws['id'])
+  ws['handler'].send_message('Em giấu mùa hè sau cánh cửa')
 
 def on_data(ws, message):
   print('#%d send %s' % (ws['id'], message))
@@ -470,7 +476,7 @@ def on_periodic(srv):
   with mutex_mqtt:
     if len(mqtt) > 0:
       s = mqtt.pop(0)
-      print(s)
+      print('Queue -> ', s)
 
 if __name__ == '__main__':
   enableTrace(True)
@@ -500,3 +506,70 @@ EOF
 cat c >> d.py
 
 sed -i '614,619d' d.py
+sed -i '865d' d.py
+sed -i "632 i\      'Server: Alpine\\\r\\\n'        \\\\" d.py
+
+sed -i '607s/header + //' d.py
+
+sed -i '605 i\    frame = ABNF.create_frame(message, opcode, 0)' d.py
+sed -i '606 i\    payload = frame.format()' d.py
+sed -i '584,604d' d.py
+
+sed -i '450 i\    self._frame_header = None' d.py
+sed -i '451 i\    self._frame_length = None' d.py
+sed -i '452 i\    self._frame_mask = None' d.py
+sed -i '453 i\    self._cont_data = None' d.py
+
+sed -i '569s/payload/message/' d.py
+sed -i '570s/(payload/(message/' d.py
+sed -i '576s/header + //' d.py
+sed -i '575 i\    frame = ABNF.create_frame(message, ABNF.OPCODE_CLOSE, 0)' d.py
+sed -i '575 i\    payload = frame.format()' d.py
+sed -i '573,574d' d.py
+
+sed -i '605s/return/return False/' d.py
+sed -i '612 i\    return True' d.py
+
+sed -i '610 i\    if not self.handshake_done:' d.py
+sed -i '611 i\      return False\n' d.py
+
+sed '480,$d' a | sed '408,465d' | sed '1,353d' > e
+cat >> e <<EOF
+  def _recv(self, bufsize):
+    try:
+      bytes = self.rfile.read(bufsize)
+    except (struct.error, TypeError) as e:
+      if self.keep_alive:
+        raise WebSocketException("Websocket read aborted while listening")
+      else:
+        logger.info("recv aborted after closed connection")
+        pass
+
+    if not bytes:
+      raise WebSocketConnectionClosedException()
+    return bytes
+EOF
+
+sed -i '22s/self.pong(/return (frame.opcode,/' e
+sed -i '21s/ == / in (/' e
+sed -i '21s/:/,ABNF.OPCODE_PONG):/' e
+sed -i '19d' e
+
+sed -i '4s/frame:/frame or frame.opcode not in (ABNF.OPCODE_TEXT,\n        ABNF.OPCODE_BINARY, ABNF.OPCODE_CONT, ABNF.OPCODE_CLOSE,\n         ABNF.OPCODE_PING,ABNF.OPCODE_PONG):/' e
+
+# sed -i '3 i\      if not self.keep_alive:' e
+# sed -i '4 i\        return\n' e
+
+sed -i -E '535,540s/_$/_(self, data)/' d.py
+sed -i '535,540s/opcode_handler = //' d.py
+sed -i '545,556d' d.py
+sed -i '525,528d' d.py
+sed -i '505,519d' d.py
+
+sed -i '505 i\    opcode, data = self.recv_data()' d.py
+#sed -i '506,520d' d.py
+
+sed '606,$d' d.py > f
+cat e >> f
+sed '1,604d' d.py >> f
+mv f d.py
