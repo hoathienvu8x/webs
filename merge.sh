@@ -387,7 +387,7 @@ def on_investing_periodic(ws):
     ws.send(s)
 
 def on_investing_data(ws, message):
-  global symbol_trans, m_last_changed, heartbeat_recv, mqtt
+  global symbol_trans, m_last_changed, heartbeat_recv, mqtt, all_symbols
   if message == "o":
     ev = {
       "_event":"bulk-subscribe",
@@ -397,6 +397,8 @@ def on_investing_data(ws, message):
     for it in webp_config["symbols"]:
       symbol_trans[it['pid']] = it['name']
       m_last_changed[it['pid']] = 0
+      if it['name'] not in all_symbols:
+        all_symbols.append(it['name'])
       if len(s) > 0:
         s += "%%"
       s += "isOpenPair-%s:" % it["pid"]
@@ -446,8 +448,8 @@ def on_investing_data(ws, message):
   if m_last_changed[o['pid']] != last:
     m_last_changed[o['pid']] = last
     sym = {
-      'name':symbol_trans[o['pid']],
-      'last':last,
+      'symbol':symbol_trans[o['pid']],
+      'price':last,
       'timestamp':o['timestamp']
     }
     with mutex_mqtt:
@@ -464,19 +466,197 @@ def start_investing(cfg):
   except KeyboardInterrupt:
     pass
 
+def save_quote_data(obj):
+  print(json_encode(obj))
+
 def on_open(ws):
   print('#%d connected' % ws['id'])
   ws['handler'].send_message('Em giấu mùa hè sau cánh cửa')
 
 def on_data(ws, message):
-  print('#%d send %s' % (ws['id'], message))
+  global all_symbols, mdb, m_subcribed, webp_config
+  # print('#%d send %s' % (ws['id'], message))
+  obj = json_decode(message)
+  if not isinstance(obj, dict):
+    return
+
+  if '_event' not in obj or not isinstance(obj['_event'], (str, unicode)):
+    return
+
+  if obj['_event'] == 'heartbeat':
+    ws['handler'].send_message(json_encode({"heartbeat":"h"}))
+    return
+
+  if obj['_event'] == 'subcribed':
+    if 'symbol' not in obj or not isinstance(obj['symbol'], (str, unicode)):
+      return
+
+    if not obj['symbol']:
+      return
+
+    _period = 5
+    if 'period' in obj and isinstance(obj['period'], (float, int)):
+      _period = int(obj['period'])
+
+    if _period not in (5,10,15,30,60):
+      _period = 5
+
+    if obj['symbol'] not in all_symbols:
+      return
+
+    if obj['symbol'] not in m_subcribed:
+      m_subcribed[obj['symbol']] = []
+
+    found = False
+    for c in m_subcribed[obj['symbol']]:
+      if c['handler'] == ws['handler']:
+        found = True
+        break
+
+    if not found:
+      m_subcribed[obj['symbol']].append(ws)
+
+    p = {
+      'name':obj['symbol'],
+      'contract':'',
+      'exchange': webp_config["liffe"]["name"] if obj['symbol'][0:2] == 'RM' else webp_config["ice"]["name"],
+      'open': webp_config["liffe"]["open"] if obj['symbol'][0:2] == 'RM' else webp_config["ice"]["open"],
+      'close':webp_config["liffe"]["close"] if obj['symbol'][0:2] == 'RM' else webp_config["ice"]["close"],
+      'ticks':[]
+    }
+
+    ws['handler'].send_message(json_encode(p))
+
+    return
+
+  if obj['_event'] == 'tick':
+    if 'data' not in obj or not isinstance(obj['data'], list):
+      return
+
+    if len(obj['data']) == 0:
+      return
+
+    _commit = 0
+    for it in obj['data']:
+      if not isinstance(it, dict):
+        continue
+
+      if 'symbol' not in it or 'price' not in it or 'timestamp' not in it:
+        continue
+
+      if not isinstance(it['symbol'], (str, unicode)):
+        continue
+
+      if not isinstance(it['price'], (float, int)) or it['price'] <= 0:
+        continue
+
+      if not isinstance(it['timestamp'], int) or it['timestamp'] <= 0:
+        continue
+
+      _symbol = it['symbol']
+      if _symbol not in all_symbols:
+        continue
+
+      _price = float(it['price'])
+      _timestamp = int(it['timestamp'])
+      _volume = 0
+      if 'volume' in it and isintance(it['volume'],(int, float)) and it['volume'] > 0:
+        _volume = int(it['volume'])
+
+      if _symbol not in mdb:
+        mdb[_symbol] = []
+
+      mdb[_symbol].append({
+        'price': _price,
+        'volume':_volume,
+        'timestamp':_timestamp
+      })
+
+      _commit += 1
+
+      p = {
+        '_event':'tick',
+        'symbol':_symbol,
+        'price':_price,
+        'timestamp':_timestamp
+      }
+
+      if _volume > 0:
+        p['volume'] = _volume
+
+      if _symbol in m_subcribed:
+        for c in m_subcribed[_symbol]:
+          if c['handler'] == ws['handler']:
+            continue
+
+          c['handler'].send_message(json_encode(p))
+
+    if _commit > 0:
+      save_quote_data(mdb)
+
+def on_close(ws):
+  global m_subcribed
+  for _symbol in m_subcribed:
+    for c in m_subcribed[_symbol]:
+      if c['handler'] == ws['handler']:
+        m_subcribed[_symbol].remove(c)
+        break
 
 def on_periodic(srv):
-  global mqtt
+  global mqtt, mdb, m_subcribed, all_symbols
   with mutex_mqtt:
-    if len(mqtt) > 0:
-      s = mqtt.pop(0)
-      print('Queue -> ', s)
+    if len(mqtt) == 0:
+      return
+    it = mqtt.pop(0)
+    if not isinstance(it, dict):
+      return
+
+    if 'symbol' not in it or 'price' not in it or 'timestamp' not in it:
+      return
+
+    if not isinstance(it['symbol'], (str, unicode)):
+      return
+
+    if not isinstance(it['price'], (float, int)) or it['price'] <= 0:
+      return
+
+    if not isinstance(it['timestamp'], int) or it['timestamp'] <= 0:
+      return
+
+    _symbol = it['symbol']
+    if _symbol not in all_symbols:
+      return
+
+    _price = float(it['price'])
+    _timestamp = int(it['timestamp'])
+    _volume = 0
+    if 'volume' in it and isintance(it['volume'],(int, float)) and it['volume'] > 0:
+      _volume = int(it['volume'])
+
+    if _symbol not in mdb:
+      mdb[_symbol] = []
+
+    mdb[_symbol].append({
+      'price': _price,
+      'volume':_volume,
+      'timestamp':_timestamp
+    })
+
+    p = {
+      '_event':'tick',
+      'symbol':_symbol,
+      'price':_price,
+      'timestamp':_timestamp
+    }
+
+    if _volume > 0:
+      p['volume'] = _volume
+
+    if _symbol in m_subcribed:
+      for c in m_subcribed[_symbol]:
+        c['handler'].send_message(json_encode(p))
+
+    save_quote_data(mdb)
 
 if __name__ == '__main__':
   enableTrace(True)
@@ -1231,6 +1411,100 @@ cat >> f <<EOF
       </div>
     </div>
     <script>
+      let timeseries = [];
+      let Indicators = {
+        sma: function(data, period) {
+          let output = [];
+          let scale = 1.0 / period;
+          let total = 0;
+          let i;
+          for (i = 0; i < period; i++) {
+            total += data[i];
+          }
+          output.push(total * scale);
+          for (i = period; i < data.length; i++) {
+            total += data[i] - data[i - period];
+            output.push(total * scale);
+          }
+          return output;
+        },
+        ema: function(data, period) {
+          let output = [];
+          let p = 2.0 / (period + 1);
+          let val = 0;
+          let i;
+          for (i = 0; i < period; i++) {
+            val += data[i];
+          }
+          val /= period;
+          output.push(val);
+          output.push(((data[period] - val) * p) + val);
+          let j = 1;
+          for (i = period; i < data.length; i++) {
+            let tmp = ((data[i] - output[j]) * p) + output[j];
+            j += 1;
+            output.push(tmp);
+          }
+          return output;
+        },
+        psar : function(high, low, af, maxaf) {
+          let output = [];
+          let accel_step = 1.0 / af;
+          let accel_max = 1.0 / maxaf;
+          let lng = 0;
+          if (high[0] + low[0] <= high[1] + low[1]) {
+            lng = 1;
+          }
+          let sar = lng ? low[0] : high[0];
+          let extreme = lng ? high[0] : low[0];
+          let accel = accel_step;
+          let i;
+          for (i = 0; i < high.length; i++) {
+            sar = (extreme - sar) * accel + sar;
+            if (lng) {
+              if (i >= 2 && sar > low[i - 2]) {
+                sar = low[i - 2];
+              }
+              if (sar > low[i - 1]) {
+                sar = low[i - 1];
+              }
+              if (accel < accel_max && high[i] > extreme) {
+                accel += accel_step;
+                if (accel > accel_max) {
+                  accel = accel_max;
+                }
+              }
+              if (high[i] > extreme) {
+                extreme = high[i];
+              }
+            } else {
+              if (i >= 2 && sar < high[i - 2]) {
+                sar = high[i - 2];
+              }
+              if (sar < high[i - 1]) {
+                sar = high[i - 1];
+              }
+              if (accel < accel_max && low[i] < extreme) {
+                accel += accel_step;
+                if (accel > accel_max) {
+                  accel = accel_max;
+                }
+              }
+              if (low[i] < extreme) {
+                extreme = low[i];
+              }
+            }
+            if ((lng && low[i] < sar) || (!lng && high[i] > sar)) {
+              accel = accel_step;
+              sar = extreme;
+              lng = !lng;
+              extreme = lng ? high[i] : low[i];
+            }
+            output.push(sar);
+          }
+          return output;
+        }
+      };
       document.addEventListener('DOMContentLoaded', function() {
         document.querySelector(".chat[data-chat=person2]").classList.add("active-chat");
         document.querySelector(".person[data-chat=person2]").classList.add("active");
@@ -1275,3 +1549,6 @@ sed '613,$d' d.py | sed '1,495d' >> f
 cat e >> f
 sed '1,611d' d.py >> f
 mv f d.py
+
+
+sed -i '101 i\all_symbols = []\nm_subcribed = {}\nmdb = {}' d.py
