@@ -467,7 +467,7 @@ def start_investing(cfg):
     pass
 
 def save_quote_data(obj):
-  print(json_encode(obj))
+  save_json('%s/mdb.db' % ABSPATH, obj)
 
 def get_contract_name(sym):
   m = "FGHJKMNQUVXZ"
@@ -531,6 +531,38 @@ def on_data(ws, message):
       'close':exchg["close"],
       'ticks':[]
     }
+
+    if obj['symbol'] in mdb:
+      t, v = [], []
+      for i in range(len(mdb[obj['symbol']]) - 1, -1, -1):
+        it = mdb[obj['symbol']][i]
+        ts = datetime.fromtimestamp(it['timestamp']).strftime("%Y-%m-%d %H:%M")
+        if ts not in t:
+          t.append(ts)
+          v.append({
+            'o':it['price'],
+            'h':it['price'],
+            'l':it['price'],
+            'c':it['price'],
+            'v':it['volume'],
+            't':int(time.mktime(datetime.strptime(ts, "%Y-%m-%d %H:%S").timetuple()))
+          })
+        else:
+          idx = t.index(ts)
+          if it['price'] > v[idx]['h']:
+            v[idx]['h'] = it['price']
+
+          if it['price'] < v[idx]['l']:
+            v[idx]['l'] = it['price']
+
+          v[idx]['c'] = it['price']
+          v[idx]['v'] += it['volume']
+
+          if len(t) > 640 or len(t) > _period * 60:
+            break
+
+        if len(v) > 0:
+          p['ticks'] = sorted(v, key=lambda x: x['t'])
 
     msg = json_encode(p)
     if isinstance(msg, unicode):
@@ -678,6 +710,11 @@ def on_periodic(srv):
 if __name__ == '__main__':
   enableTrace(False)
   investing_thread = None
+
+  mdb = load_json('%s/mdb.db' % ABSPATH)
+  if not isinstance(mdb, dict):
+    mdb = {}
+
   try:
     keep_running = True
 
@@ -1575,3 +1612,21 @@ mv f d.py
 
 sed -i '101 i\all_symbols = []\nm_subcribed = {}\nmdb = {}' d.py
 sed -i '1321d' d.py
+
+sed -i '135 i\def save_json(filepath, data):' d.py
+sed -i '136 i\  try:' d.py
+sed -i '137 i\    with open(filepath, "w") as fp:' d.py
+sed -i '138 i\      fp.write(json_encode(data))' d.py
+sed -i '139 i\  except:' d.py
+sed -i '140 i\    pass' d.py
+
+sed -i '141 i\\ndef load_json(filepath):' d.py
+sed -i '143 i\  try:' d.py
+sed -i '144 i\    with open(filepath, "r") as fp:' d.py
+sed -i '145 i\      data = json.load(fp)' d.py
+sed -i '146 i\    return data' d.py
+sed -i '147 i\  except:' d.py
+sed -i '148 i\    return None\n' d.py
+
+sed -i "35 i\ABSPATH = '`pwd`'\n" d.py
+sed -i '31 i\from datetime import datetime' d.py
