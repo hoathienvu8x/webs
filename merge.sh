@@ -434,7 +434,7 @@ def on_investing_data(ws, message):
   if not o:
     return
 
-  if 'last_numeric' not in o and 'last' not in o or 'pid' not in o \
+  if 'last_numeric' not in o and 'last' not in o or 'pid' not in o \\
     or 'timestamp' not in o:
     return
 
@@ -468,6 +468,11 @@ def start_investing(cfg):
 
 def save_quote_data(obj):
   print(json_encode(obj))
+
+def get_contract_name(sym):
+  m = "FGHJKMNQUVXZ"
+  i = m.find(sym[-3:-2]) + 1
+  return '%02d/%s' % (i, sym[-2:])
 
 def on_open(ws):
   print('#%d connected' % ws['id'])
@@ -516,16 +521,21 @@ def on_data(ws, message):
     if not found:
       m_subcribed[obj['symbol']].append(ws)
 
+    exchg = webp_config["liffe"] if obj['symbol'][0:2] == 'RM' else webp_config["ice"]
+
     p = {
       'name':obj['symbol'],
-      'contract':'',
-      'exchange': webp_config["liffe"]["name"] if obj['symbol'][0:2] == 'RM' else webp_config["ice"]["name"],
-      'open': webp_config["liffe"]["open"] if obj['symbol'][0:2] == 'RM' else webp_config["ice"]["open"],
-      'close':webp_config["liffe"]["close"] if obj['symbol'][0:2] == 'RM' else webp_config["ice"]["close"],
+      'contract':get_contract_name(obj['symbol']),
+      'exchange': exchg["name"],
+      'open': exchg["open"],
+      'close':exchg["close"],
       'ticks':[]
     }
 
-    ws['handler'].send_message(json_encode(p))
+    msg = json_encode(p)
+    if isinstance(msg, unicode):
+      msg = encode_to_UTF8(msg)
+    ws['handler'].send_message(msg)
 
     return
 
@@ -585,17 +595,21 @@ def on_data(ws, message):
         p['volume'] = _volume
 
       if _symbol in m_subcribed:
+        msg = json_encode(p)
+        if isinstance(msg, unicode):
+          msg = encode_to_UTF8(msg)
         for c in m_subcribed[_symbol]:
           if c['handler'] == ws['handler']:
             continue
 
-          c['handler'].send_message(json_encode(p))
+          c['handler'].send_message(msg)
 
     if _commit > 0:
       save_quote_data(mdb)
 
 def on_close(ws):
   global m_subcribed
+  print('#%d disconnected' % ws['id'])
   for _symbol in m_subcribed:
     for c in m_subcribed[_symbol]:
       if c['handler'] == ws['handler']:
@@ -653,13 +667,16 @@ def on_periodic(srv):
       p['volume'] = _volume
 
     if _symbol in m_subcribed:
+      msg = json_encode(p)
+      if isinstance(msg, unicode):
+        msg = encode_to_UTF8(msg)
       for c in m_subcribed[_symbol]:
-        c['handler'].send_message(json_encode(p))
+        c['handler'].send_message(msg)
 
     save_quote_data(mdb)
 
 if __name__ == '__main__':
-  enableTrace(True)
+  enableTrace(False)
   investing_thread = None
   try:
     keep_running = True
@@ -669,7 +686,8 @@ if __name__ == '__main__':
     investing_thread.start()
 
     server = WebsocketServer(host='127.0.0.1', port=webp_config["port"],
-      on_accept=on_open, on_message=on_data, on_periodic=on_periodic)
+      on_accept=on_open, on_message=on_data, on_close=on_close,
+      on_periodic=on_periodic)
 
     server.run_forever()
   except KeyboardInterrupt:
@@ -746,8 +764,12 @@ sed -i '545,556d' d.py
 sed -i '525,528d' d.py
 sed -i '505,519d' d.py
 
-sed -i '505 i\    opcode, data = self.recv_data()' d.py
-#sed -i '506,520d' d.py
+sed -i '505 i\    try:' d.py
+sed -i '506 i\      opcode, data = self.recv_data()' d.py
+sed -i '507 i\    except (SocketError, WebSocketException, Exception) as e:' d.py
+sed -i '509 i\      logger.info("Client closed connection.")' d.py
+sed -i '510 i\      self.keep_alive = 0' d.py
+sed -i '511 i\      return' d.py
 
 sed -i '138 i\def html_minify(html):' d.py
 sed -i "139 i\  html = re.sub('[\\\r\\\n\\\t]',' ', html)" d.py
@@ -1545,10 +1567,11 @@ cat >> f <<EOF
       self.wfile.write(html_minify(html_tpl))
 EOF
 
-sed '613,$d' d.py | sed '1,495d' >> f
+sed '618,$d' d.py | sed '1,509d' >> f
 cat e >> f
-sed '1,611d' d.py >> f
+sed '1,616d' d.py >> f
 mv f d.py
 
 
 sed -i '101 i\all_symbols = []\nm_subcribed = {}\nmdb = {}' d.py
+sed -i '1321d' d.py
