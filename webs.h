@@ -170,6 +170,7 @@ struct webs_event_list {
   int (*on_pong)(struct webs_client*);
   int (*on_ping)(struct webs_client*);
   int (*is_route)(struct webs_client*, const char *);
+  int (*on_periodic)(struct webs_server *);
 };
 
 struct webs_socket {
@@ -191,6 +192,9 @@ struct webs_client {
   struct webs_socket buf;
   struct webs_client * next;
   struct webs_client * prev;
+  int state;
+  pthread_mutex_t mtx_snd;
+  pthread_mutex_t mtx_sta;
 };
 
 /* 
@@ -205,6 +209,8 @@ struct webs_server {
   size_t id;
   int soc;
   void * data;
+  pthread_t periodic;
+  pthread_mutex_t mtx;
 };
 
 /* 
@@ -279,7 +285,7 @@ int webs_hold(webs_server* _srv);
  * @return 0 if the server could not be created, or a pointer
  * to the newly created server otherwise.
  */
-webs_server* webs_start(int _port, int as_thread, void * data);
+webs_server* webs_start(int _port, int as_thread, void * data, int (*on_periodic)(struct webs_server *));
 
 /* 
  * C89 doesn't officially support 64-bt integer constants, so

@@ -443,6 +443,26 @@ static int __webs_generate_handshake(char* _dst, char* _key) {
   return sprintf(_dst, WEBS_RESPONSE_FMT, buf);
 }
 
+static int __webs_get_client_state(webs_client* _self) {
+  int state;
+  if (!_self) return -1;
+  pthread_mutex_lock(&_self->mtx_sta);
+  state = _self->state;
+  pthread_mutex_unlock(&_self->mtx_sta);
+  return state;
+}
+
+static int __webs_set_client_state(webs_client* _self, int state) {
+  if (!_self) return -1;
+  if (state < 0 || state > 3)
+    return -1;
+  pthread_mutex_lock(&_self->mtx_sta);
+  if (_self->state != state)
+    _self->state = state;
+  pthread_mutex_unlock(&_self->mtx_sta);
+  return 0;
+}
+
 /* 
  * removes a client from a server's internal listing.
  * @param _node: a pointer to the client in the server's listing.
@@ -457,6 +477,10 @@ static void __webs_remove_client(webs_client* _node) {
     _node->next->prev = _node->prev;
 
   _node->srv->num_clients--;
+
+  pthread_mutex_destroy(&_node->mtx_sta);
+  pthread_mutex_destroy(&_node->mtx_snd);
+
   free(_node);
 
   return;
@@ -600,6 +624,8 @@ static void* __webs_client_main(void* _self) {
     ws_info.webs_key);
 
   send(self->fd, soc_buffer.data, soc_buffer.len, 0);
+
+  __webs_set_client_state(self, 1);
 
   /* call client on_open function */
   if (*self->srv->events.on_open)
@@ -746,14 +772,27 @@ static void* __webs_client_main(void* _self) {
       (*self->srv->events.on_error)(self, error);
   }
 
+  __webs_set_client_state(self, 2);
+
   if (*self->srv->events.on_close)
     (*self->srv->events.on_close)(self);
+
+  __webs_set_client_state(self, 3);
 
   ABORT:
 
   close(self->fd);
   __webs_remove_client(self);
 
+  return NULL;
+}
+
+static void * __webs_periodic(void * _srv) {
+  webs_server * srv = (webs_server*) _srv;
+  for (;;) {
+    usleep(100);
+    (*srv->events.on_periodic)(srv);
+  }
   return NULL;
 }
 
@@ -766,10 +805,19 @@ static void* __webs_main(void* _srv) {
   webs_server* srv = (webs_server*) _srv;
   webs_client* user_ptr;
 
+  if (*srv->events.on_periodic)
+    pthread_create(&srv->periodic, 0, __webs_periodic, srv);
+
   for (;;) {
     user_ptr = malloc(sizeof(webs_client));
     if (!user_ptr)
       WEBS_XERR("Failed to allocate memory!", ENOMEM);
+
+    if (pthread_mutex_init(&user_ptr->mtx_sta, NULL))
+      WEBS_XERR("Failed to allocate state mutex!", ENOMEM);
+
+    if (pthread_mutex_init(&user_ptr->mtx_snd, NULL))
+      WEBS_XERR("Failed to allocate send mutex!", ENOMEM);
 
     user_ptr->fd = __webs_accept_connection(srv->soc, user_ptr);
     user_ptr->srv = srv;
@@ -797,15 +845,23 @@ void webs_eject(webs_client* _self) {
 void webs_close(webs_server* _srv) {
   webs_client* node = _srv->head;
   webs_client* temp;
+
+  if (_srv->periodic)
+    pthread_cancel(_srv->periodic);
+
   if (_srv->thread)
     pthread_cancel(_srv->thread);
+
   close(_srv->soc);
 
+  pthread_mutex_lock(&_srv->mtx);
   while (node) {
     temp = node->next;
     webs_eject(node);
     node = temp;
   }
+  pthread_mutex_unlock(&_srv->mtx);
+  pthread_mutex_destroy(&_srv->mtx);
 
   free(_srv);
 
@@ -816,9 +872,10 @@ int webs_send(webs_client* _self, char* _data) {
   /* general-purpose recv/send buffer */
   struct webs_buffer soc_buffer = {0};
 
-  int len = 0, i = 0, frame_count;
+  int len = 0, i = 0, frame_count, rc;
   char buf[WEBS_MAX_PACKET];
 
+  if (__webs_get_client_state(_self) != 1) return 0;
   /* check for nullptr or empty string */
   if (!_data || !*_data) return 0;
 
@@ -826,12 +883,16 @@ int webs_send(webs_client* _self, char* _data) {
   while (_data[++len]);
   if (len < WEBS_MAX_PACKET - 2) {
     /* write data */
-    return write(
+    pthread_mutex_lock(&_self->mtx_snd);
+    rc = write(
       _self->fd,
       soc_buffer.data,
       __webs_make_frame(_data, soc_buffer.data, len, 0x1, 0x1)
     );
+    pthread_mutex_unlock(&_self->mtx_snd);
+    return rc;
   }
+  pthread_mutex_lock(&_self->mtx_snd);
   frame_count = ceil(len / (WEBS_MAX_PACKET - 2));
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
@@ -846,37 +907,46 @@ int webs_send(webs_client* _self, char* _data) {
       soc_buffer.data,
       __webs_make_frame(buf, soc_buffer.data, size, _op, _fin)
     ) < 0) {
+      pthread_mutex_unlock(&_self->mtx_snd);
       return -1;
     }
   }
+  pthread_mutex_unlock(&_self->mtx_snd);
   return 0;
 }
 int webs_broadcast(webs_client* _self, char* _data) {
   webs_client* node;
   if (!_self || !_self->srv) return -1;
+  pthread_mutex_lock(&_self->srv->mtx);
   node = _self->srv->head;
   while (node) {
     if (node->id == _self->id) continue;
     (void)webs_send(node, _data);
     node = node->next;
   }
+  pthread_mutex_unlock(&_self->srv->mtx);
   return 0;
 }
 int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
   /* general-purpose recv/send buffer */
   struct webs_buffer soc_buffer = {0};
-  int i = 0, frame_count = 0;
+  int i = 0, frame_count = 0, rc;
   char buf[WEBS_MAX_PACKET];
 
+  if (__webs_get_client_state(_self) != 1) return 0;
   /* check for NULL or empty string */
   if (!_data || !*_data) return 0;
   if (_n < WEBS_MAX_PACKET) {
-    return write(
+    pthread_mutex_lock(&_self->mtx_snd);
+    rc = write(
       _self->fd,
       soc_buffer.data,
       __webs_make_frame(_data, soc_buffer.data, _n, 0x1, 0x1)
     );
+    pthread_mutex_unlock(&_self->mtx_snd);
+    return rc;
   }
+  pthread_mutex_lock(&_self->mtx_snd);
   frame_count = ceil(_n / (WEBS_MAX_PACKET - 2));
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
@@ -891,40 +961,48 @@ int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
       soc_buffer.data,
       __webs_make_frame(buf, soc_buffer.data, size, _op, _fin)
     ) < 0) {
+      pthread_mutex_unlock(&_self->mtx_snd);
       return -1;
     }
   }
+  pthread_mutex_unlock(&_self->mtx_snd);
   return 0;
 }
 int webs_nbroadcast(webs_client* _self, char* _data, ssize_t _n) {
   webs_client* node;
   if (!_self || !_self->srv) return -1;
+  pthread_mutex_lock(&_self->srv->mtx);
   node = _self->srv->head;
   while (node) {
     if (node->id == _self->id) continue;
     (void)webs_sendn(node, _data, _n);
     node = node->next;
   }
+  pthread_mutex_unlock(&_self->srv->mtx);
   return 0;
 }
 int webs_sendall(webs_server* _srv, char* _data) {
   webs_client* node;
   if (!_srv) return -1;
+  pthread_mutex_lock(&_srv->mtx);
   node = _srv->head;
   while (node) {
     (void)webs_send(node, _data);
     node = node->next;
   }
+  pthread_mutex_unlock(&_srv->mtx);
   return 0;
 }
 int webs_nsendall(webs_server* _srv, char* _data, ssize_t _n) {
   webs_client* node;
   if (!_srv) return -1;
+  pthread_mutex_lock(&_srv->mtx);
   node = _srv->head;
   while (node) {
     (void)webs_sendn(node, _data, _n);
     node = node->next;
   }
+  pthread_mutex_unlock(&_srv->mtx);
   return 0;
 }
 void webs_pong(webs_client* _self) {
@@ -941,7 +1019,7 @@ int webs_hold(webs_server* _srv) {
   return 0;
 }
 
-webs_server* webs_start(int _port, int as_thread, void * data) {
+webs_server* webs_start(int _port, int as_thread, void * data, int (*on_periodic)(struct webs_server *)) {
   /* static id counter variable */
   static size_t server_id_counter = 0;
 
@@ -963,6 +1041,9 @@ webs_server* webs_start(int _port, int as_thread, void * data) {
   error = listen(soc, WEBS_MAX_BACKLOG);
   if (error < 0) return NULL;
 
+  if (pthread_mutex_init(&server->mtx, NULL))
+    WEBS_XERR("Failed to allocate mutex!", ENOMEM);
+
   server->soc = soc;
   server->data = data;
 
@@ -974,6 +1055,7 @@ webs_server* webs_start(int _port, int as_thread, void * data) {
   server->events.on_pong  = NULL;
   server->events.on_ping  = NULL;
   server->events.is_route  = NULL;
+  server->events.on_periodic  = on_periodic;
 
   server->id = server_id_counter;
   server_id_counter++;
