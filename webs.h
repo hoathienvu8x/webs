@@ -22,17 +22,17 @@
 #define __WEBS_XE_PASTE(V) __WEBS_XE_PASTE_WRAPPER(V)
 
 #if __STDC_VERSION__ > 199409L
-	#ifdef NOESCAPE
-		#define WEBS_XERR(MESG, ERR) { printf("Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", func: %s [line "__WEBS_XE_PASTE(__LINE__)"]) : "MESG"\n", __func__); exit(ERR); }
-	#else
-		#define WEBS_XERR(MESG, ERR) { printf("\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__)", func: \x1b[1m%s\x1b[0m [line \x1b[1m"__WEBS_XE_PASTE(__LINE__)"\x1b[0m]) : "MESG"\n", __func__); exit(ERR); }
-	#endif
+  #ifdef NOESCAPE
+    #define WEBS_XERR(MESG, ERR) { printf("Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", func: %s [line "__WEBS_XE_PASTE(__LINE__)"]) : "MESG"\n", __func__); exit(ERR); }
+  #else
+    #define WEBS_XERR(MESG, ERR) { printf("\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__)", func: \x1b[1m%s\x1b[0m [line \x1b[1m"__WEBS_XE_PASTE(__LINE__)"\x1b[0m]) : "MESG"\n", __func__); exit(ERR); }
+  #endif
 #else
-	#ifdef NOESCAPE
-		#define WEBS_XERR(MESG, ERR) { printf("Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", line "__WEBS_XE_PASTE(__LINE__)") : "MESG"\n"); exit(ERR); }
-	#else
-		#define WEBS_XERR(MESG, ERR) { printf("\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__)", line \x1b[1m"__WEBS_XE_PASTE(__LINE__)"\x1b[0m) : "MESG"\n"); exit(ERR); }
-	#endif
+  #ifdef NOESCAPE
+    #define WEBS_XERR(MESG, ERR) { printf("Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", line "__WEBS_XE_PASTE(__LINE__)") : "MESG"\n"); exit(ERR); }
+  #else
+    #define WEBS_XERR(MESG, ERR) { printf("\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__)", line \x1b[1m"__WEBS_XE_PASTE(__LINE__)"\x1b[0m) : "MESG"\n"); exit(ERR); }
+  #endif
 #endif
 
 
@@ -40,36 +40,36 @@
  * declare endian-independant macros
  */
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	
-	#define WEBS_BIG_ENDIAN_WORD(X) X
-	
-	#define WEBS_BIG_ENDIAN_DWORD(X) X
-	
-	#define WEBS_BIG_ENDIAN_QWORD(X) X
-	
+  
+  #define WEBS_BIG_ENDIAN_WORD(X) X
+  
+  #define WEBS_BIG_ENDIAN_DWORD(X) X
+  
+  #define WEBS_BIG_ENDIAN_QWORD(X) X
+  
 #else
-	
-	#if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
-		#warning could not determine system endianness (assumng little endian).
-	#endif
-	
-	#define WEBS_BIG_ENDIAN_WORD(X) (((X << 8) & 0xFF00) | ((X >> 8) & 0x00FF))
-	
-	#define WEBS_BIG_ENDIAN_DWORD(X) ((uint32_t) (\
-		(((uint32_t) X >> 24) & 0x000000FFUL) |\
-		(((uint32_t) X >> 8 ) & 0x0000FF00UL) |\
-		(((uint32_t) X << 8 ) & 0x00FF0000UL) |\
-		(((uint32_t) X << 24) & 0xFF000000UL)))
-	
-	#define WEBS_BIG_ENDIAN_QWORD(X) ( __WEBS_BIG_ENDIAN_QWORD(X) )
-	
+  
+  #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+    #warning could not determine system endianness (assumng little endian).
+  #endif
+  
+  #define WEBS_BIG_ENDIAN_WORD(X) (((X << 8) & 0xFF00) | ((X >> 8) & 0x00FF))
+  
+  #define WEBS_BIG_ENDIAN_DWORD(X) ((uint32_t) (\
+    (((uint32_t) X >> 24) & 0x000000FFUL) |\
+    (((uint32_t) X >> 8 ) & 0x0000FF00UL) |\
+    (((uint32_t) X << 8 ) & 0x00FF0000UL) |\
+    (((uint32_t) X << 24) & 0xFF000000UL)))
+  
+  #define WEBS_BIG_ENDIAN_QWORD(X) ( __WEBS_BIG_ENDIAN_QWORD(X) )
+  
 #endif
 
 /* 
  * make sure SSIZE_MAX is defined.
  */
 #ifndef SSIZE_MAX
-	#define SSIZE_MAX ( (~((size_t) 0)) >> 1 )
+  #define SSIZE_MAX ( (~((size_t) 0)) >> 1 )
 #endif
 
 /* 
@@ -126,85 +126,85 @@ typedef struct webs_client webs_client;
  * list of errors passed to `on_error`
  */
 enum webs_error {
-	WEBS_ERR_NONE = 0,
-	WEBS_ERR_READ_FAILED,
-	WEBS_ERR_UNEXPECTED_CONTINUTATION,
-	WEBS_ERR_NO_SUPPORT,
-	WEBS_ERR_OVERFLOW
+  WEBS_ERR_NONE = 0,
+  WEBS_ERR_READ_FAILED,
+  WEBS_ERR_UNEXPECTED_CONTINUTATION,
+  WEBS_ERR_NO_SUPPORT,
+  WEBS_ERR_OVERFLOW
 };
 
 /* 
  * stores header data from a websocket frame.
  */
 struct webs_frame {
-	ssize_t length; /* length of the frame's payload in bytes */
-	uint32_t key;   /* a 32-bit key used to decrypt the frame's
-	                 *   payload (provided per frame) */
-	uint16_t info;  /* the 16-bit frame header */
-	short off;      /* offset from star of frame to payload*/
+  ssize_t length; /* length of the frame's payload in bytes */
+  uint32_t key;   /* a 32-bit key used to decrypt the frame's
+                   *   payload (provided per frame) */
+  uint16_t info;  /* the 16-bit frame header */
+  short off;      /* offset from star of frame to payload*/
 };
 
 /* 
  * stores data parsed from an HTTP websocket request.
  */
 struct webs_info {
-	char webs_key[24 + 1]; /* websocket key (base-64 encoded string) */
-	uint16_t webs_vrs;     /* websocket version (integer) */
-	uint16_t http_vrs;     /* HTTP version (concatonated chars) */
+  char webs_key[24 + 1]; /* websocket key (base-64 encoded string) */
+  uint16_t webs_vrs;     /* websocket version (integer) */
+  uint16_t http_vrs;     /* HTTP version (concatonated chars) */
 };
 
 /* 
  * used for sending / receiving data.
  */
 struct webs_buffer {
-	char data[WEBS_MAX_PACKET];
-	ssize_t len;
+  char data[WEBS_MAX_PACKET];
+  ssize_t len;
 };
 
 /* 
  * user-implemented event handlers.
  */
 struct webs_event_list {
-	int (*on_error)(struct webs_client*, enum webs_error);
-	int (*on_data )(struct webs_client*, char*, ssize_t);
-	int (*on_open )(struct webs_client*);
-	int (*on_close)(struct webs_client*);
-	int (*on_pong)(struct webs_client*);
-	int (*on_ping)(struct webs_client*);
+  int (*on_error)(struct webs_client*, enum webs_error);
+  int (*on_data )(struct webs_client*, char*, ssize_t);
+  int (*on_open )(struct webs_client*);
+  int (*on_close)(struct webs_client*);
+  int (*on_pong)(struct webs_client*);
+  int (*on_ping)(struct webs_client*);
 };
 
 /* 
  * holds information relevant to a client.
  */
 struct webs_client {
-	struct webs_server* srv; /* a pointer to the server the the
-	                          *   clinet is connected to */
-	struct sockaddr_in addr; /* client address */
-	pthread_t thread;        /* client's posix thread id */
-	size_t id;               /* client's internal id */
-	int fd;                  /* client's descriptor */
+  struct webs_server* srv; /* a pointer to the server the the
+                            *   clinet is connected to */
+  struct sockaddr_in addr; /* client address */
+  pthread_t thread;        /* client's posix thread id */
+  size_t id;               /* client's internal id */
+  int fd;                  /* client's descriptor */
 };
 
 /* 
  * holds information relevant to a server.
  */
 struct webs_server {
-	struct webs_event_list events;
-	struct webs_client_node* head;
-	struct webs_client_node* tail;
-	size_t num_clients;
-	pthread_t thread;
-	size_t id;
-	int soc;
+  struct webs_event_list events;
+  struct webs_client_node* head;
+  struct webs_client_node* tail;
+  size_t num_clients;
+  pthread_t thread;
+  size_t id;
+  int soc;
 };
 
 /* 
  * element in a linked list of connected clients.
  */
 struct webs_client_node {
-	struct webs_client client;
-	struct webs_client_node* next;
-	struct webs_client_node* prev;
+  struct webs_client client;
+  struct webs_client_node* next;
+  struct webs_client_node* prev;
 };
 
 /* 
