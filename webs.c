@@ -447,7 +447,7 @@ static int __webs_generate_handshake(char* _dst, char* _key) {
  * removes a client from a server's internal listing.
  * @param _node: a pointer to the client in the server's listing.
  */
-static void __webs_remove_client(struct webs_client_node* _node) {
+static void __webs_remove_client(webs_client* _node) {
   if (_node == NULL) return;
 
   if (_node->prev)
@@ -456,7 +456,7 @@ static void __webs_remove_client(struct webs_client_node* _node) {
   if (_node->next)
     _node->next->prev = _node->prev;
 
-  _node->client.srv->num_clients--;
+  _node->srv->num_clients--;
   free(_node);
 
   return;
@@ -469,36 +469,27 @@ static void __webs_remove_client(struct webs_client_node* _node) {
  * @return a pointer to the added client in the server's listing.
  * (or NULL if NULL was provided)
  */
-static webs_client* __webs_add_client(webs_server* _srv, webs_client _cli) {
-  if (_srv == NULL) return NULL;
+static void __webs_add_client(webs_server* _srv, webs_client * node) {
+  if (_srv == NULL) return;
 
   /* if this is first client, set head = tail = new element */
   if (_srv->tail == NULL) {
-    _srv->tail = _srv->head = malloc(sizeof(struct webs_client_node));
-
-    if (_srv->tail == NULL)
-      WEBS_XERR("Failed to allocate memory!", ENOMEM);
+    _srv->tail = _srv->head = node;
 
     _srv->head->prev = NULL;
   }
 
   /* otherwise, just add after the current tail */
   else {
-    _srv->tail->next = malloc(sizeof(struct webs_client_node));
-
-    if (_srv->tail->next == NULL)
-      WEBS_XERR("Failed to allocate memory!", ENOMEM);
+    _srv->tail->next = node;
 
     _srv->tail->next->prev = _srv->tail;
     _srv->tail = _srv->tail->next;
   }
 
-  _srv->tail->client = _cli;
   _srv->tail->next = NULL;
 
   _srv->num_clients++;
-
-  return &_srv->tail->client;
 }
 
 /* 
@@ -761,7 +752,7 @@ static void* __webs_client_main(void* _self) {
   ABORT:
 
   close(self->fd);
-  __webs_remove_client((struct webs_client_node*) self);
+  __webs_remove_client(self);
 
   return NULL;
 }
@@ -774,14 +765,17 @@ static void* __webs_client_main(void* _self) {
 static void* __webs_main(void* _srv) {
   webs_server* srv = (webs_server*) _srv;
   webs_client* user_ptr;
-  webs_client user;
 
   for (;;) {
-    user.fd = __webs_accept_connection(srv->soc, &user);
-    user.srv = srv;
+    user_ptr = malloc(sizeof(webs_client));
+    if (!user_ptr)
+      WEBS_XERR("Failed to allocate memory!", ENOMEM);
 
-    if (user.fd >= 0) {
-      user_ptr = __webs_add_client(srv, user);
+    user_ptr->fd = __webs_accept_connection(srv->soc, user_ptr);
+    user_ptr->srv = srv;
+
+    if (user_ptr->fd >= 0) {
+      __webs_add_client(srv, user_ptr);
       pthread_create(&user_ptr->thread, 0, __webs_client_main, user_ptr);
     }
   }
@@ -795,21 +789,21 @@ void webs_eject(webs_client* _self) {
 
   close(_self->fd);
   pthread_cancel(_self->thread);
-  __webs_remove_client((struct webs_client_node*) _self);
+  __webs_remove_client(_self);
 
   return;
 }
 
 void webs_close(webs_server* _srv) {
-  struct webs_client_node* node = _srv->head;
-  struct webs_client_node* temp;
+  webs_client* node = _srv->head;
+  webs_client* temp;
 
   pthread_cancel(_srv->thread);
   close(_srv->soc);
 
   while (node) {
     temp = node->next;
-    webs_eject(&node->client);
+    webs_eject(node);
     node = temp;
   }
 
@@ -857,7 +851,17 @@ int webs_send(webs_client* _self, char* _data) {
   }
   return 0;
 }
-
+int webs_broadcast(webs_client* _self, char* _data) {
+  webs_client* node;
+  if (!_self || !_self->srv) return -1;
+  node = _self->srv->head;
+  while (node) {
+    if (node->id == _self->id) continue;
+    (void)webs_send(node, _data);
+    node = node->next;
+  }
+  return 0;
+}
 int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
   /* general-purpose recv/send buffer */
   struct webs_buffer soc_buffer = {0};
@@ -892,7 +896,37 @@ int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
   }
   return 0;
 }
-
+int webs_nbroadcast(webs_client* _self, char* _data, ssize_t _n) {
+  webs_client* node;
+  if (!_self || !_self->srv) return -1;
+  node = _self->srv->head;
+  while (node) {
+    if (node->id == _self->id) continue;
+    (void)webs_sendn(node, _data, _n);
+    node = node->next;
+  }
+  return 0;
+}
+int webs_sendall(webs_server* _srv, char* _data) {
+  webs_client* node;
+  if (!_srv) return -1;
+  node = _srv->head;
+  while (node) {
+    (void)webs_send(node, _data);
+    node = node->next;
+  }
+  return 0;
+}
+int webs_nsendall(webs_server* _srv, char* _data, ssize_t _n) {
+  webs_client* node;
+  if (!_srv) return -1;
+  node = _srv->head;
+  while (node) {
+    (void)webs_sendn(node, _data, _n);
+    node = node->next;
+  }
+  return 0;
+}
 void webs_pong(webs_client* _self) {
   webs_sendn(_self, (char*) &WEBS_PONG, 2);
   return;

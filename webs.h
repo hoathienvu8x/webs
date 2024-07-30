@@ -189,6 +189,8 @@ struct webs_client {
   size_t id;               /* client's internal id */
   int fd;                  /* client's descriptor */
   struct webs_socket buf;
+  struct webs_client * next;
+  struct webs_client * prev;
 };
 
 /* 
@@ -196,21 +198,12 @@ struct webs_client {
  */
 struct webs_server {
   struct webs_event_list events;
-  struct webs_client_node* head;
-  struct webs_client_node* tail;
+  struct webs_client* head;
+  struct webs_client* tail;
   size_t num_clients;
   pthread_t thread;
   size_t id;
   int soc;
-};
-
-/* 
- * element in a linked list of connected clients.
- */
-struct webs_client_node {
-  struct webs_client client;
-  struct webs_client_node* next;
-  struct webs_client_node* prev;
 };
 
 /* 
@@ -249,6 +242,7 @@ void webs_close(webs_server* _srv);
  * @return the result of the write.
  */
 int webs_send(webs_client* _self, char* _data);
+int webs_broadcast(webs_client* _self, char* _data);
 
 /**
  * user function used to send binary data over a websocket.
@@ -258,7 +252,10 @@ int webs_send(webs_client* _self, char* _data);
  * @return the result of the write.
  */
 int webs_sendn(webs_client* _self, char* _data, ssize_t _n);
+int webs_nbroadcast(webs_client* _self, char* _data, ssize_t _n);
 
+int webs_sendall(webs_server* _srv, char* _data);
+int webs_nsendall(webs_server* _srv, char* _data, ssize_t _n);
 /**
  * sends a pong frame to a client over a websocket.
  * @param _self: the client that the pong is to be sent to.
