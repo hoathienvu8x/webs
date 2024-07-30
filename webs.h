@@ -1,6 +1,10 @@
 #ifndef __WEBS_H__
 #define __WEBS_H__
 
+#ifndef _GNU_SOURCE
+  #define _GNU_SOURCE
+#endif
+
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -40,29 +44,21 @@
  * declare endian-independant macros
  */
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-  
   #define WEBS_BIG_ENDIAN_WORD(X) X
-  
   #define WEBS_BIG_ENDIAN_DWORD(X) X
-  
   #define WEBS_BIG_ENDIAN_QWORD(X) X
-  
 #else
-  
   #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
     #warning could not determine system endianness (assumng little endian).
   #endif
-  
   #define WEBS_BIG_ENDIAN_WORD(X) (((X << 8) & 0xFF00) | ((X >> 8) & 0x00FF))
-  
   #define WEBS_BIG_ENDIAN_DWORD(X) ((uint32_t) (\
     (((uint32_t) X >> 24) & 0x000000FFUL) |\
     (((uint32_t) X >> 8 ) & 0x0000FF00UL) |\
     (((uint32_t) X << 8 ) & 0x00FF0000UL) |\
     (((uint32_t) X << 24) & 0xFF000000UL)))
-  
+
   #define WEBS_BIG_ENDIAN_QWORD(X) ( __WEBS_BIG_ENDIAN_QWORD(X) )
-  
 #endif
 
 /* 
@@ -75,7 +71,7 @@
 /* 
  * buffer sizes...
  */
-#define WEBS_MAX_PACKET 32768
+#define WEBS_MAX_PACKET 1024
 #define WEBS_MAX_BACKLOG 8
 
 /* 
@@ -173,6 +169,12 @@ struct webs_event_list {
   int (*on_ping)(struct webs_client*);
 };
 
+struct webs_socket {
+  char data[WEBS_MAX_PACKET];
+  ssize_t len;
+  ssize_t pos;
+};
+
 /* 
  * holds information relevant to a client.
  */
@@ -183,6 +185,7 @@ struct webs_client {
   pthread_t thread;        /* client's posix thread id */
   size_t id;               /* client's internal id */
   int fd;                  /* client's descriptor */
+  struct webs_socket buf;
 };
 
 /* 
