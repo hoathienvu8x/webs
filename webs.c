@@ -797,8 +797,8 @@ void webs_eject(webs_client* _self) {
 void webs_close(webs_server* _srv) {
   webs_client* node = _srv->head;
   webs_client* temp;
-
-  pthread_cancel(_srv->thread);
+  if (_srv->thread)
+    pthread_cancel(_srv->thread);
   close(_srv->soc);
 
   while (node) {
@@ -934,10 +934,14 @@ void webs_pong(webs_client* _self) {
 
 int webs_hold(webs_server* _srv) {
   if (_srv == NULL) return -1;
-  return pthread_join(_srv->thread, 0);
+  if (_srv->thread) {
+    return pthread_join(_srv->thread, 0);
+  }
+  (void)__webs_main(_srv);
+  return 0;
 }
 
-webs_server* webs_start(int _port) {
+webs_server* webs_start(int _port, int as_thread) {
   /* static id counter variable */
   static size_t server_id_counter = 0;
 
@@ -972,9 +976,9 @@ webs_server* webs_start(int _port) {
 
   server->id = server_id_counter;
   server_id_counter++;
-
-  /* fork further processing to seperate thread */
-  pthread_create(&server->thread, 0, __webs_main, server);
-
+  if (as_thread) {
+    /* fork further processing to seperate thread */
+    pthread_create(&server->thread, 0, __webs_main, server);
+  }
   return server;
 }
