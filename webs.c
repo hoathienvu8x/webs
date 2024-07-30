@@ -941,7 +941,7 @@ int webs_hold(webs_server* _srv) {
   return 0;
 }
 
-webs_server* webs_start(int _port, int as_thread) {
+webs_server* webs_start(int _port, int as_thread, void * data) {
   /* static id counter variable */
   static size_t server_id_counter = 0;
 
@@ -964,6 +964,7 @@ webs_server* webs_start(int _port, int as_thread) {
   if (error < 0) return NULL;
 
   server->soc = soc;
+  server->data = data;
 
   /* initialise default handlers */
   server->events.on_error = NULL;

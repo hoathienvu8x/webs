@@ -63,8 +63,8 @@ int myFunc4(webs_client * self, const char * path) {
 }
 
 int main(void) {
-  webs_server* server0 = webs_start(7752, 0);
-  webs_server* server1 = webs_start(7754, 1);
+  webs_server* server0 = webs_start(7752, 0, NULL);
+  webs_server* server1 = webs_start(7754, 1, NULL);
   
   if (!server0 || !server1) {
     printf("failed to initialise a server.\n");

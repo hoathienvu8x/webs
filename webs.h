@@ -204,6 +204,7 @@ struct webs_server {
   pthread_t thread;
   size_t id;
   int soc;
+  void * data;
 };
 
 /* 
@@ -278,7 +279,7 @@ int webs_hold(webs_server* _srv);
  * @return 0 if the server could not be created, or a pointer
  * to the newly created server otherwise.
  */
-webs_server* webs_start(int _port, int as_thread);
+webs_server* webs_start(int _port, int as_thread, void * data);
 
 /* 
  * C89 doesn't officially support 64-bt integer constants, so
