@@ -147,6 +147,8 @@ struct webs_info {
   char webs_key[24 + 1]; /* websocket key (base-64 encoded string) */
   uint16_t webs_vrs;     /* websocket version (integer) */
   uint16_t http_vrs;     /* HTTP version (concatonated chars) */
+  char req_type[8];
+  char path[256];
 };
 
 /* 
@@ -167,6 +169,7 @@ struct webs_event_list {
   int (*on_close)(struct webs_client*);
   int (*on_pong)(struct webs_client*);
   int (*on_ping)(struct webs_client*);
+  int (*is_route)(struct webs_client*, const char *);
 };
 
 struct webs_socket {

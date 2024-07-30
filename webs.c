@@ -375,19 +375,18 @@ static int __webs_process_handshake(char* _src, struct webs_info* _rtn) {
   char http_vrs_low = 0;
 
   char param_str[256];
-  char req_type[8];
   int nbytes = 0;
 
   _rtn->webs_key[0] = 0;
   _rtn->webs_vrs = 0;
   _rtn->http_vrs = 0;
 
-  sscanf(_src, "%s %*s HTTP/%c.%c%*[^\r]\r%n", req_type,
+  sscanf(_src, "%s %s HTTP/%c.%c%*[^\r]\r%n", _rtn->req_type, _rtn->path,
     (char*) &_rtn->http_vrs, &http_vrs_low, &nbytes);
 
   _src += nbytes;
 
-  if (strcasecmp(req_type, "GET"))
+  if (strcasecmp(_rtn->req_type, "GET"))
     return -1;
 
   _rtn->http_vrs <<= 8;
@@ -590,6 +589,20 @@ static void* __webs_client_main(void* _self) {
   /* if we failed, abort */
   if (__webs_process_handshake(soc_buffer.data, &ws_info) < 0)
     goto ABORT;
+
+  if (*self->srv->events.is_route) {
+    char path[256];
+    size_t p = strcspn(ws_info.path, "?# ");
+    if (p != strlen(ws_info.path)) {
+      memcpy(path, ws_info.path, p);
+      path[p] = '\0';
+    } else {
+      memcpy(path, ws_info.path, strlen(ws_info.path));
+    }
+    if (!(*self->srv->events.is_route)(self, path)) {
+      goto ABORT;
+    }
+  }
 
   /* if we succeeded, generate + tansmit response */
   soc_buffer.len = __webs_generate_handshake(soc_buffer.data,
@@ -921,6 +934,7 @@ webs_server* webs_start(int _port) {
   server->events.on_close = NULL;
   server->events.on_pong  = NULL;
   server->events.on_ping  = NULL;
+  server->events.is_route  = NULL;
 
   server->id = server_id_counter;
   server_id_counter++;
