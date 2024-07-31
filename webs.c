@@ -381,8 +381,9 @@ static int __webs_process_handshake(char* _src, struct webs_info* _rtn) {
   _rtn->webs_vrs = 0;
   _rtn->http_vrs = 0;
 
-  sscanf(_src, "%s %s HTTP/%c.%c%*[^\r]\r%n", _rtn->req_type, _rtn->path,
-    (char*) &_rtn->http_vrs, &http_vrs_low, &nbytes);
+  if (sscanf(_src, "%s %s HTTP/%c.%c%*[^\r]\r%n", _rtn->req_type, _rtn->path,
+    (char*) &_rtn->http_vrs, &http_vrs_low, &nbytes) <= 0)
+    return -1;
 
   _src += nbytes;
 
@@ -396,18 +397,21 @@ static int __webs_process_handshake(char* _src, struct webs_info* _rtn) {
     _src += nbytes;
 
     if (!strcasecmp(param_str, "Sec-WebSocket-Version:")) {
-      sscanf(_src, "%hu%*[^\r]\r%n", &_rtn->webs_vrs, &nbytes);
+      if (sscanf(_src, "%hu%*[^\r]\r%n", &_rtn->webs_vrs, &nbytes) <= 0)
+        return -1;
       _src += nbytes;
     }
 
     else
     if (!strcasecmp(param_str, "Sec-WebSocket-Key:")) {
-      sscanf(_src, "%s%*[^\r]\r%n", _rtn->webs_key, &nbytes);
+      if (sscanf(_src, "%s%*[^\r]\r%n", _rtn->webs_key, &nbytes) <= 0)
+        return -1;
       _src += nbytes;
     }
 
     else {
-      sscanf(_src, "%*[^\r]\r%n", &nbytes);
+      if (sscanf(_src, "%*[^\r]\r%n", &nbytes) < 0)
+        return -1;
       _src += nbytes;
     }
   }
@@ -824,7 +828,8 @@ static void* __webs_main(void* _srv) {
 
     if (user_ptr->fd >= 0) {
       __webs_add_client(srv, user_ptr);
-      pthread_create(&user_ptr->thread, 0, __webs_client_main, user_ptr);
+      if (pthread_create(&user_ptr->thread, 0, __webs_client_main, user_ptr))
+        WEBS_XERR("Could not create the client thread!", ENOMEM);
     }
   }
 
@@ -1015,12 +1020,11 @@ int webs_hold(webs_server* _srv) {
   if (_srv->thread) {
     return pthread_join(_srv->thread, 0);
   }
-  (void)__webs_main(_srv);
   return 0;
 }
 
-webs_server* webs_start(int _port, int as_thread, void * data, int (*on_periodic)(struct webs_server *)) {
-  /* static id counter variable */
+webs_server* webs_create(int _port, void * data) {
+    /* static id counter variable */
   static size_t server_id_counter = 0;
 
   const int ONE = 1;
@@ -1055,13 +1059,19 @@ webs_server* webs_start(int _port, int as_thread, void * data, int (*on_periodic
   server->events.on_pong  = NULL;
   server->events.on_ping  = NULL;
   server->events.is_route  = NULL;
-  server->events.on_periodic  = on_periodic;
+  server->events.on_periodic  = NULL;
 
   server->id = server_id_counter;
   server_id_counter++;
+  return server;
+}
+
+void webs_start(webs_server* server, int as_thread) {
   if (as_thread) {
     /* fork further processing to seperate thread */
-    pthread_create(&server->thread, 0, __webs_main, server);
+    if (pthread_create(&server->thread, 0, __webs_main, server))
+      WEBS_XERR("Could not create the server thread!", ENOMEM);
+  } else {
+    (void)__webs_main(server);
   }
-  return server;
 }

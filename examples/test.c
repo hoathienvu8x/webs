@@ -68,8 +68,8 @@ int myFunc5(webs_server * srv) {
 }
 
 int main(void) {
-  webs_server* server0 = webs_start(7752, 0, NULL, myFunc5);
-  webs_server* server1 = webs_start(7754, 1, NULL, NULL);
+  webs_server* server0 = webs_create(7752, NULL);
+  webs_server* server1 = webs_create(7754, NULL);
   
   if (!server0 || !server1) {
     printf("failed to initialise a server.\n");
@@ -81,12 +81,16 @@ int main(void) {
   server0->events.on_close = myFunc2;
   server0->events.on_error = myFunc3;
   server0->events.is_route = myFunc4;
+  server0->events.on_periodic = myFunc5;
   
   /* not all handlers need to be set... */
   server1->events.on_open = myFuncZ;
   server1->events.on_close = myFunc2;
   server1->events.on_data = myFunc1;
-  
+
+  webs_start(server1, 1);
+  webs_start(server0, 0);
+
   webs_hold(server0);
   webs_hold(server1);
   
