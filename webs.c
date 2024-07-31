@@ -1,5 +1,6 @@
 #include "webs.h"
 #include <math.h>
+#include <netdb.h>
 
 /* headers for ping and pong frames */
 uint8_t WEBS_PING[2] = {0x89, 0x00};
@@ -521,30 +522,6 @@ static void __webs_add_client(webs_server* _srv, webs_client * node) {
 }
 
 /* 
- * binds a socket to an address and port.
- * @param _soc: the socket to be bound.
- * @param _addr: a null-terminatng string containing the
- * address that the socket should be bound to.
- * @param _port: the port that the socket should be bound
- * to as a 16-bit integer.
- * @return -1 on error, or 0 otherwise.
- */
-static int __webs_bind_address(int _soc, int16_t _port) {
-  struct sockaddr_in soc_addr;
-  int error;
-
-  /* init struct */
-  soc_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  soc_addr.sin_port = htons(_port);
-  soc_addr.sin_family = AF_INET;
-
-  /* bind socket */
-  error = bind(_soc, (struct sockaddr*) &soc_addr, sizeof(soc_addr));
-
-  return -(error < 0);
-}
-
-/* 
  * accepts a connection from a client and provides it with
  * relevant data.
  * @param _soc: the socket that the connection is being requested on.
@@ -1028,19 +1005,54 @@ webs_server* webs_create(int _port, void * data) {
   static size_t server_id_counter = 0;
 
   const int ONE = 1;
-  int error = 0;
+  int error = 0, soc = -1;
+  struct addrinfo hints, *results, *try;
+	char port[8] = {0};
 
   webs_server* server = malloc(sizeof(webs_server));
 
-  /* basic socket setup */
-  int soc = socket(AF_INET, SOCK_STREAM, 0);
-  if (soc < 0) return NULL;
+  if (server == NULL)
+    WEBS_XERR("Failed to allocate memory!", ENOMEM);
 
-  /* allow reconnection to socket (for sanity) */
-  setsockopt(soc, SOL_SOCKET, SO_REUSEADDR, &ONE, sizeof(int));
+  memset(&hints, 0, sizeof(struct addrinfo));
+	hints.ai_flags = AI_PASSIVE;
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
 
-  error = __webs_bind_address(soc, _port);
-  if (error < 0) return NULL;
+	/* Port. */
+	error = snprintf(port, sizeof(port) - 1, "%d", _port);
+  if (error <= 0)
+    WEBS_XERR("snprintf() failed", errno);
+
+	if (getaddrinfo(NULL, port, &hints, &results) != 0)
+		WEBS_XERR("getaddrinfo() failed", errno);
+
+  for (try = results; try != NULL; try = try->ai_next) {
+		/* try to make a socket with this setup */
+		if ((soc = socket(try->ai_family, try->ai_socktype,
+			try->ai_protocol)) < 0) {
+			continue;
+		}
+
+		/* Reuse previous address. */
+		if (setsockopt(soc, SOL_SOCKET, SO_REUSEADDR, (const char *)&ONE,
+			sizeof(ONE)) < 0) {
+			WEBS_XERR("setsockopt(SO_REUSEADDR) failed", errno);
+		}
+
+		/* Bind. */
+		if (bind(soc, try->ai_addr, try->ai_addrlen) < 0)
+			WEBS_XERR("Bind failed", errno);
+
+		/* if it worked, we're done. */
+		break;
+	}
+
+	freeaddrinfo(results);
+
+	/* Check if binded with success. */
+	if (try == NULL)
+		WEBS_XERR("couldn't find a port to bind to", errno);
 
   error = listen(soc, WEBS_MAX_BACKLOG);
   if (error < 0) return NULL;
