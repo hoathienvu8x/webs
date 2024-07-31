@@ -771,7 +771,7 @@ static void* __webs_client_main(void* _self) {
 static void * __webs_periodic(void * _srv) {
   webs_server * srv = (webs_server*) _srv;
   for (;;) {
-    usleep(100);
+    usleep(srv->interval);
     (*srv->events.on_periodic)(srv);
   }
   return NULL;
@@ -786,7 +786,7 @@ static void* __webs_main(void* _srv) {
   webs_server* srv = (webs_server*) _srv;
   webs_client* user_ptr;
 
-  if (*srv->events.on_periodic)
+  if (*srv->events.on_periodic && srv->interval > 0)
     pthread_create(&srv->periodic, 0, __webs_periodic, srv);
 
   for (;;) {
@@ -1064,6 +1064,7 @@ webs_server* webs_create(int _port, void * data) {
 
   server->soc = soc;
   server->data = data;
+  server->interval = 100;
 
   server->head = server->tail = NULL;
 
@@ -1090,4 +1091,9 @@ void webs_start(webs_server* server, int as_thread) {
   } else {
     (void)__webs_main(server);
   }
+}
+
+void webs_set_interval(webs_server* _srv, int interval) {
+  if (!_srv) return;
+  _srv->interval = interval;
 }

@@ -211,6 +211,7 @@ struct webs_server {
   void * data;
   pthread_t periodic;
   pthread_mutex_t mtx;
+  int interval;
 };
 
 /* 
@@ -277,6 +278,7 @@ void webs_pong(webs_client* _self);
  * was provided.
  */
 int webs_hold(webs_server* _srv);
+void webs_set_interval(webs_server* _srv, int interval);
 
 /**
  * initialises a websocket sever and starts listening for

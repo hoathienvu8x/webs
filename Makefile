@@ -3,7 +3,7 @@ ifeq ($(build),release)
 else
 	CFLAGS = -Og -g
 endif
-CFLAGS += -Wall -Wextra -Wpedantic -Wno-overlength-strings -Wstrict-aliasing
+CFLAGS += -Wall -Wextra -Wpedantic -Wno-overlength-strings -Wno-strict-aliasing
 STD := c89
 CC := gcc
 
