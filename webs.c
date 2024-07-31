@@ -550,7 +550,7 @@ static int __webs_accept_connection(int _soc, webs_client* _c) {
  */
 static void* __webs_client_main(void* _self) {
   webs_client* self = (webs_client*) _self;
-  ssize_t total, _n = -1;
+  ssize_t total = 0, _n = -1;
   ssize_t error;
 
   /* flag set if frame is a continuation one */
@@ -1062,6 +1062,8 @@ webs_server* webs_create(int _port, void * data) {
 
   server->soc = soc;
   server->data = data;
+
+  server->head = server->tail = NULL;
 
   /* initialise default handlers */
   server->events.on_error = NULL;

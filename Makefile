@@ -1,4 +1,9 @@
-CFLAGS := -Wall -Wextra -Wpedantic -Wno-overlength-strings
+ifeq ($(build),release)
+	CFLAGS = -O3
+else
+	CFLAGS = -Og -g
+endif
+CFLAGS += -Wall -Wextra -Wpedantic -Wno-overlength-strings
 STD := c89
 CC := gcc
 
