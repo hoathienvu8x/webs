@@ -52,10 +52,10 @@
     #warning could not determine system endianness (assumng little endian).
   #endif
   #define WEBS_BIG_ENDIAN_WORD(X) (((X << 8) & 0xFF00) | ((X >> 8) & 0x00FF))
-  #define WEBS_BIG_ENDIAN_DWORD(X) ((uint32_t) (\
-    (((uint32_t) X >> 24) & 0x000000FFUL) |\
-    (((uint32_t) X >> 8 ) & 0x0000FF00UL) |\
-    (((uint32_t) X << 8 ) & 0x00FF0000UL) |\
+  #define WEBS_BIG_ENDIAN_DWORD(X) ((uint32_t) ( \
+    (((uint32_t) X >> 24) & 0x000000FFUL) | \
+    (((uint32_t) X >> 8 ) & 0x0000FF00UL) | \
+    (((uint32_t) X << 8 ) & 0x00FF0000UL) | \
     (((uint32_t) X << 24) & 0xFF000000UL)))
 
   #define WEBS_BIG_ENDIAN_QWORD(X) ( __WEBS_BIG_ENDIAN_QWORD(X) )

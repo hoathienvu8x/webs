@@ -803,6 +803,8 @@ static void* __webs_main(void* _srv) {
     user_ptr->fd = __webs_accept_connection(srv->soc, user_ptr);
     user_ptr->srv = srv;
 
+    user_ptr->next = user_ptr->prev = NULL;
+
     if (user_ptr->fd >= 0) {
       __webs_add_client(srv, user_ptr);
       if (pthread_create(&user_ptr->thread, 0, __webs_client_main, user_ptr))
