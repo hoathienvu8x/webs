@@ -889,7 +889,7 @@ int webs_send(webs_client* _self, char* _data) {
     return rc;
   }
   pthread_mutex_lock(&_self->mtx_snd);
-  frame_count = ceil(len / (WEBS_MAX_PACKET - 4));
+  frame_count = ceil((float)len / (float)(WEBS_MAX_PACKET - 4));
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
     int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 4 : len % (WEBS_MAX_PACKET - 4);
@@ -945,7 +945,7 @@ int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
     return rc;
   }
   pthread_mutex_lock(&_self->mtx_snd);
-  frame_count = ceil(_n / (WEBS_MAX_PACKET - 4));
+  frame_count = ceil((float)_n / (float)(WEBS_MAX_PACKET - 4));
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
     int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 4 : _n % (WEBS_MAX_PACKET - 4);
