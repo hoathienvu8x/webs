@@ -209,11 +209,13 @@ static int __webs_b64_encode(char* _s, char* _d, size_t _n) {
  */
 static ssize_t __webs_asserted_read(webs_client* cli, void* _dst, size_t _n) {
   size_t i = 0;
+  ssize_t n = -1;
   char * p = _dst;
 
   for (; i < _n; i++) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
-      ssize_t n = read(cli->fd, cli->buf.data, sizeof(cli->buf.data));
+      memset(&cli->buf, 0, sizeof(cli->buf));
+      n = read(cli->fd, cli->buf.data, sizeof(cli->buf.data));
       if (n < 0) return -1;
       cli->buf.pos = 0;
       cli->buf.len = (size_t)n;
@@ -247,9 +249,11 @@ static int __webs_decode_data(char* _dta, uint32_t _key, ssize_t _n) {
  */
 static size_t __webs_flush(webs_client* cli, size_t _n) {
   size_t i = 0;
+  ssize_t n = -1;
   for (; i < _n; i++) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
-      ssize_t n = read(cli->fd, cli->buf.data, sizeof(cli->buf.data));
+      memset(&cli->buf, 0, sizeof(cli->buf));
+      n = read(cli->fd, cli->buf.data, sizeof(cli->buf.data));
       if (n < 0) return -1;
       cli->buf.pos = 0;
       cli->buf.len = (size_t)n;
@@ -557,12 +561,16 @@ static void* __webs_client_main(void* _self) {
   int cont = 0;
 
   /* general-purpose recv/send buffer */
-  struct webs_buffer soc_buffer = {0};
+  struct webs_buffer soc_buffer;
 
   /* temporary variables */
   struct webs_info ws_info;
   struct webs_frame frm;
   char* data = 0;
+
+  memset(&soc_buffer, 0, sizeof(soc_buffer));
+  memset(&ws_info, 0, sizeof(ws_info));
+  memset(&frm, 0, sizeof(frm));
 
   /* wait for HTTP websocket request header */
   do {
@@ -802,6 +810,7 @@ static void* __webs_main(void* _srv) {
 
     user_ptr->fd = __webs_accept_connection(srv->soc, user_ptr);
     user_ptr->srv = srv;
+    memset(&user_ptr->buf, 0, sizeof(user_ptr->buf));
 
     user_ptr->next = user_ptr->prev = NULL;
 
@@ -854,10 +863,11 @@ void webs_close(webs_server* _srv) {
 
 int webs_send(webs_client* _self, char* _data) {
   /* general-purpose recv/send buffer */
-  struct webs_buffer soc_buffer = {0};
-
+  struct webs_buffer soc_buffer;
   int len = 0, i = 0, frame_count, rc;
   char buf[WEBS_MAX_PACKET];
+
+  memset(&soc_buffer, 0, sizeof(soc_buffer));
 
   if (__webs_get_client_state(_self) != 1) return 0;
   /* check for nullptr or empty string */
@@ -913,9 +923,11 @@ int webs_broadcast(webs_client* _self, char* _data) {
 }
 int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
   /* general-purpose recv/send buffer */
-  struct webs_buffer soc_buffer = {0};
+  struct webs_buffer soc_buffer;
   int i = 0, frame_count = 0, rc;
   char buf[WEBS_MAX_PACKET];
+
+  memset(&soc_buffer, 0, sizeof(soc_buffer));
 
   if (__webs_get_client_state(_self) != 1) return 0;
   /* check for NULL or empty string */
