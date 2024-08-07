@@ -613,7 +613,8 @@ static void* __webs_client_main(void* _self) {
   soc_buffer.len = __webs_generate_handshake(soc_buffer.data,
     ws_info.webs_key);
 
-  send(self->fd, soc_buffer.data, soc_buffer.len, 0);
+  if (send(self->fd, soc_buffer.data, soc_buffer.len, 0) <= 0)
+    goto ABORT;
 
   __webs_set_client_state(self, 1);
 
