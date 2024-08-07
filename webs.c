@@ -865,7 +865,7 @@ int webs_send(webs_client* _self, char* _data) {
 
   /* get length of data */
   while (_data[++len]);
-  if (len < WEBS_MAX_PACKET - 2) {
+  if (len < WEBS_MAX_PACKET - 4) {
     /* write data */
     pthread_mutex_lock(&_self->mtx_snd);
     rc = write(
@@ -877,15 +877,15 @@ int webs_send(webs_client* _self, char* _data) {
     return rc;
   }
   pthread_mutex_lock(&_self->mtx_snd);
-  frame_count = ceil(len / (WEBS_MAX_PACKET - 2));
+  frame_count = ceil(len / (WEBS_MAX_PACKET - 4));
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
-    int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 2 : len % (WEBS_MAX_PACKET - 2);
+    int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 4 : len % (WEBS_MAX_PACKET - 4);
     uint8_t _op = i != 0 ? 0x0 : 0x1;
     uint8_t _fin = i != frame_count - 1 ? 0x0 : 0x1;
     memset(&buf, 0, sizeof(buf));
-    memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 2)], size);
-    buf[WEBS_MAX_PACKET - 1] = '\0';
+    memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 4)], size);
+    buf[size] = '\0';
     if (write(
       _self->fd,
       soc_buffer.data,
@@ -920,7 +920,7 @@ int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
   if (__webs_get_client_state(_self) != 1) return 0;
   /* check for NULL or empty string */
   if (!_data || !*_data) return 0;
-  if (_n < WEBS_MAX_PACKET) {
+  if (_n < WEBS_MAX_PACKET - 4) {
     pthread_mutex_lock(&_self->mtx_snd);
     rc = write(
       _self->fd,
@@ -931,15 +931,15 @@ int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
     return rc;
   }
   pthread_mutex_lock(&_self->mtx_snd);
-  frame_count = ceil(_n / (WEBS_MAX_PACKET - 2));
+  frame_count = ceil(_n / (WEBS_MAX_PACKET - 4));
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
-    int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 2 : _n % (WEBS_MAX_PACKET - 2);
+    int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 4 : _n % (WEBS_MAX_PACKET - 4);
     uint8_t _op = i != 0 ? 0x0 : 0x1;
     uint8_t _fin = i != frame_count - 1 ? 0x0 : 0x1;
     memset(&buf, 0, sizeof(buf));
-    memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 2)], size);
-    buf[WEBS_MAX_PACKET - 1] = '\0';
+    memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 4)], size);
+    buf[size] = '\0';
     if (write(
       _self->fd,
       soc_buffer.data,
