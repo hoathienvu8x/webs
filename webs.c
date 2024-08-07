@@ -581,6 +581,7 @@ static void* __webs_client_main(void* _self) {
       soc_buffer.len -= 4;
       break;
     }
+    if (soc_buffer.len >= WEBS_MAX_PACKET) break;
   } while (_n > 0);
 
   /* if we did not recieve one, abort */
