@@ -737,7 +737,7 @@ static void* __webs_client_main(void* _self) {
 
     if (data) {
       if (*self->srv->events.on_data)
-        (*self->srv->events.on_data)(self, data, total);
+        (*self->srv->events.on_data)(self, WEBSFR_GET_OPCODE(frm.info), data, total);
     }
 
     free(data);

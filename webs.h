@@ -166,7 +166,7 @@ struct webs_buffer {
  */
 struct webs_event_list {
   void (*on_error)(struct webs_client*, enum webs_error);
-  void (*on_data )(struct webs_client*, char*, ssize_t);
+  void (*on_data )(struct webs_client*, int, char*, ssize_t);
   void (*on_open )(struct webs_client*);
   void (*on_close)(struct webs_client*);
   void (*on_pong)(struct webs_client*);
