@@ -2,6 +2,105 @@
 #include <math.h>
 #include <netdb.h>
 
+
+/* 
+ * macros to report runtime errors...
+ */
+#define __WEBS_XE_PASTE_WRAPPER(x) __WEBS_XE_PASTE_RAW(x)
+#define __WEBS_XE_PASTE_RAW(x) #x
+#define __WEBS_XE_PASTE(V) __WEBS_XE_PASTE_WRAPPER(V)
+
+#if __STDC_VERSION__ > 199409L
+  #ifdef NOESCAPE
+    #define WEBS_XERR(MESG, ERR) { printf("Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", func: %s [line "__WEBS_XE_PASTE(__LINE__)"]) : "MESG"\n", __func__); exit(ERR); }
+  #else
+    #define WEBS_XERR(MESG, ERR) { printf("\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__)", func: \x1b[1m%s\x1b[0m [line \x1b[1m"__WEBS_XE_PASTE(__LINE__)"\x1b[0m]) : "MESG"\n", __func__); exit(ERR); }
+  #endif
+#else
+  #ifdef NOESCAPE
+    #define WEBS_XERR(MESG, ERR) { printf("Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", line "__WEBS_XE_PASTE(__LINE__)") : "MESG"\n"); exit(ERR); }
+  #else
+    #define WEBS_XERR(MESG, ERR) { printf("\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__)", line \x1b[1m"__WEBS_XE_PASTE(__LINE__)"\x1b[0m) : "MESG"\n"); exit(ERR); }
+  #endif
+#endif
+
+
+/* 
+ * declare endian-independant macros
+ * http://www.yolinux.com/TUTORIALS/Endian-Byte-Order.html
+ */
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  #define WEBS_BIG_ENDIAN_WORD(X) X
+  #define WEBS_BIG_ENDIAN_DWORD(X) X
+  #define WEBS_BIG_ENDIAN_QWORD(X) X
+#else
+  #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+    #warning could not determine system endianness (assumng little endian).
+  #endif
+  #define WEBS_BIG_ENDIAN_WORD(x) ( (((x) >> 8) & 0x00FF) | (((x) << 8) & 0xFF00) )
+  #define WEBS_BIG_ENDIAN_DWORD(x) ( (((x) >> 24) & 0x000000FF) | (((x) >>  8) & 0x0000FF00) | \
+    (((x) <<  8) & 0x00FF0000) | (((x) << 24) & 0xFF000000) )
+  #define WEBS_BIG_ENDIAN_QWORD(x) ( (((x) >> 56) & 0x00000000000000FF) | \
+    (((x) >> 40) & 0x000000000000FF00) | (((x) >> 24) & 0x0000000000FF0000) | \
+    (((x) >>  8) & 0x00000000FF000000) | (((x) <<  8) & 0x000000FF00000000) | \
+    (((x) << 24) & 0x0000FF0000000000) | (((x) << 40) & 0x00FF000000000000) | \
+    (((x) << 56) & 0xFF00000000000000) )
+
+#endif
+
+/* 
+ * make sure SSIZE_MAX is defined.
+ */
+#ifndef SSIZE_MAX
+  #define SSIZE_MAX ( (~((size_t) 0)) >> 1 )
+#endif
+
+/* 
+ * buffer sizes...
+ */
+#define WEBS_MAX_BACKLOG 8
+
+/* 
+ * maximum packet recieve size is SSIZE_MAX.
+ */
+#define WEBS_MAX_RECIEVE SSIZE_MAX
+
+/* 
+ * macros for extracting bitwise data from a websocket frame's 16-bit
+ * header.
+ */
+#define WEBSFR_GET_LENGTH(H) ( ((uint8_t*) &H)[1] & WEBSFR_LENGTH_MASK[1] )
+#define WEBSFR_GET_OPCODE(H) ( ((uint8_t*) &H)[0] & WEBSFR_OPCODE_MASK[0] )
+#define WEBSFR_GET_MASKED(H) ( ((uint8_t*) &H)[1] & WEBSFR_MASKED_MASK[1] )
+#define WEBSFR_GET_FINISH(H) ( ((uint8_t*) &H)[0] & WEBSFR_FINISH_MASK[0] )
+#define WEBSFR_GET_RESVRD(H) ( ((uint8_t*) &H)[0] & WEBSFR_RESVRD_MASK[0] )
+
+#define WEBSFR_SET_LENGTH(H, V) ( ((uint8_t*) &H)[1] |= V & 0x7F )
+#define WEBSFR_SET_OPCODE(H, V) ( ((uint8_t*) &H)[0] |= V & 0x0F )
+#define WEBSFR_SET_MASKED(H, V) ( ((uint8_t*) &H)[1] |= (V << 7) & 0x80 )
+#define WEBSFR_SET_FINISH(H, V) ( ((uint8_t*) &H)[0] |= (V << 7) & 0x80 )
+#define WEBSFR_SET_RESVRD(H, V) ( ((uint8_t*) &H)[0] |= (V << 4) & 0x70 )
+
+/* 
+ * HTTP response format for confirming a websocket connection.
+ */
+#define WEBS_RESPONSE_FMT "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n"
+
+/* 
+ * macro to convert an integer to its base-64 representation.
+ */
+#define TO_B64(X) ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[X])
+
+/* 
+ * cast macro (can be otherwise pretty ugly)
+ */
+#define CASTP(X, T) (*((T*) (X)))
+
+/* 
+ * bitwise rotate left
+ */
+#define ROL(X, N) ((X << N) | (X >> ((sizeof(X) * 8) - N)))
+
 /* headers for ping and pong frames */
 uint8_t WEBS_PING[2] = {0x89, 0x00};
 uint8_t WEBS_PONG[2] = {0x8A, 0x00};
@@ -911,6 +1010,10 @@ int webs_broadcast(webs_client* _self, char* _data) {
   }
   pthread_mutex_unlock(&_self->srv->mtx);
   return 0;
+}
+void * webs_get_context(webs_client* _self) {
+  if (!_self || !_self->srv) return NULL;
+  return _self->srv->data;
 }
 int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
   /* general-purpose recv/send buffer */
