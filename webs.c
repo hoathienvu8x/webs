@@ -25,24 +25,11 @@ static int __webs_strcat(char* _buf, char* _a, char* _b) {
 }
 
 /* 
- * C89 doesn't officially support 64-bt integer constants, so
- * thats why this is here...
- */
-uint64_t __WEBS_BIG_ENDIAN_QWORD(uint64_t _x) {
-  ((uint32_t*) &_x)[0] = WEBS_BIG_ENDIAN_DWORD(((uint32_t*) &_x)[0]);
-  ((uint32_t*) &_x)[1] = WEBS_BIG_ENDIAN_DWORD(((uint32_t*) &_x)[1]);
-  ((uint32_t*) &_x)[0] ^= ((uint32_t*) &_x)[1];
-  ((uint32_t*) &_x)[1] ^= ((uint32_t*) &_x)[0];
-  ((uint32_t*) &_x)[0] ^= ((uint32_t*) &_x)[1];
-  return _x;
-}
-
-/* 
  * takes the SHA-1 hash of `_n` bytes of data (pointed to by `_s`),
  * storing the 160-bit (20-byte) result in the buffer pointed to by `_d`.
  */
 static int __webs_sha1(char* _s, char* _d, uint64_t _n) {
-  uint64_t raw_bits = _n * 8;       /* length of message in bits */
+  uint64_t raw_bits = _n * 8, * p = NULL;       /* length of message in bits */
   uint32_t a, b, c, d, e, f, k, t;  /* internal temporary variables */
   uint64_t C, O, i;                 /* iteration variables */
   short j;                          /* likewise */
@@ -79,7 +66,8 @@ static int __webs_sha1(char* _s, char* _d, uint64_t _n) {
   /* if n is less than 120 bytes, then we can store the expanded data
    * directly in our buffer */
   if (_n < 120) {
-    *((uint64_t*) &ext[pad_n - 8]) = WEBS_BIG_ENDIAN_QWORD(raw_bits);
+    p = (uint64_t*) &ext[pad_n - 8];
+    *p = WEBS_BIG_ENDIAN_QWORD(raw_bits);
     ext[_n] = 0x80;
 
     for (i = 0; i < _n; i++)
@@ -91,7 +79,8 @@ static int __webs_sha1(char* _s, char* _d, uint64_t _n) {
     rem_chks_begin = num_chks - 2;
 
     ext[_n - offset] = 0x80;
-    *((uint64_t*) &ext[120]) = WEBS_BIG_ENDIAN_QWORD(raw_bits);
+    p = (uint64_t*) &ext[120];
+    *p = WEBS_BIG_ENDIAN_QWORD(raw_bits);
 
     for (i = 0; i < _n - offset; i++)
       ext[i] = _s[offset + i];

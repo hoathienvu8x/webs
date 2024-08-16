@@ -42,6 +42,7 @@
 
 /* 
  * declare endian-independant macros
+ * http://www.yolinux.com/TUTORIALS/Endian-Byte-Order.html
  */
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
   #define WEBS_BIG_ENDIAN_WORD(X) X
@@ -51,14 +52,15 @@
   #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
     #warning could not determine system endianness (assumng little endian).
   #endif
-  #define WEBS_BIG_ENDIAN_WORD(X) (((X << 8) & 0xFF00) | ((X >> 8) & 0x00FF))
-  #define WEBS_BIG_ENDIAN_DWORD(X) ((uint32_t) ( \
-    (((uint32_t) X >> 24) & 0x000000FFUL) | \
-    (((uint32_t) X >> 8 ) & 0x0000FF00UL) | \
-    (((uint32_t) X << 8 ) & 0x00FF0000UL) | \
-    (((uint32_t) X << 24) & 0xFF000000UL)))
+  #define WEBS_BIG_ENDIAN_WORD(x) ( (((x) >> 8) & 0x00FF) | (((x) << 8) & 0xFF00) )
+  #define WEBS_BIG_ENDIAN_DWORD(x) ( (((x) >> 24) & 0x000000FF) | (((x) >>  8) & 0x0000FF00) | \
+    (((x) <<  8) & 0x00FF0000) | (((x) << 24) & 0xFF000000) )
+  #define WEBS_BIG_ENDIAN_QWORD(x) ( (((x) >> 56) & 0x00000000000000FF) | \
+    (((x) >> 40) & 0x000000000000FF00) | (((x) >> 24) & 0x0000000000FF0000) | \
+    (((x) >>  8) & 0x00000000FF000000) | (((x) <<  8) & 0x000000FF00000000) | \
+    (((x) << 24) & 0x0000FF0000000000) | (((x) << 40) & 0x00FF000000000000) | \
+    (((x) << 56) & 0xFF00000000000000) )
 
-  #define WEBS_BIG_ENDIAN_QWORD(X) ( __WEBS_BIG_ENDIAN_QWORD(X) )
 #endif
 
 /* 
@@ -289,11 +291,5 @@ void webs_set_interval(webs_server* _srv, int interval);
  */
 webs_server* webs_create(int _port, void * data);
 void webs_start(webs_server* _srv, int as_thread);
-
-/* 
- * C89 doesn't officially support 64-bt integer constants, so
- * thats why this mess is here...  (there is a better way)
- */
-uint64_t __WEBS_BIG_ENDIAN_QWORD(uint64_t _x);
 
 #endif /* __WEBS_H__ */
