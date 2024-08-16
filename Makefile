@@ -19,7 +19,7 @@ compile:
 	$(CC) -c *.c examples/test.c $(CFLAGS) -std=$(STD)
 
 build: compile
-	$(CC) -o webs *.o -lpthread
+	$(CC) -o webs *.o -lpthread -lm
 
 clean:
 	-rm -f webs 

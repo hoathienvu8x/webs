@@ -165,14 +165,14 @@ struct webs_buffer {
  * user-implemented event handlers.
  */
 struct webs_event_list {
-  int (*on_error)(struct webs_client*, enum webs_error);
-  int (*on_data )(struct webs_client*, char*, ssize_t);
-  int (*on_open )(struct webs_client*);
-  int (*on_close)(struct webs_client*);
-  int (*on_pong)(struct webs_client*);
-  int (*on_ping)(struct webs_client*);
+  void (*on_error)(struct webs_client*, enum webs_error);
+  void (*on_data )(struct webs_client*, char*, ssize_t);
+  void (*on_open )(struct webs_client*);
+  void (*on_close)(struct webs_client*);
+  void (*on_pong)(struct webs_client*);
+  void (*on_ping)(struct webs_client*);
   int (*is_route)(struct webs_client*, const char *);
-  int (*on_periodic)(struct webs_server *);
+  void (*on_periodic)(struct webs_server *);
 };
 
 struct webs_socket {

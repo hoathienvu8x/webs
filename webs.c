@@ -585,7 +585,7 @@ static void* __webs_client_main(void* _self) {
     goto ABORT;
 
   if (*self->srv->events.is_route) {
-    char path[256];
+    char path[256] = {0};
     size_t p = strcspn(ws_info.path, "?# ");
     if (p != strlen(ws_info.path)) {
       memcpy(path, ws_info.path, p);
