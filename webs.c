@@ -2,7 +2,6 @@
 #include <math.h>
 #include <netdb.h>
 
-
 /* 
  * macros to report runtime errors...
  */
@@ -111,6 +110,29 @@ uint8_t WEBSFR_OPCODE_MASK[2] = {0x0F, 0x00};
 uint8_t WEBSFR_MASKED_MASK[2] = {0x00, 0x80};
 uint8_t WEBSFR_FINISH_MASK[2] = {0x80, 0x00};
 uint8_t WEBSFR_RESVRD_MASK[2] = {0x70, 0x00};
+
+
+/* 
+ * stores header data from a websocket frame.
+ */
+struct webs_frame {
+  ssize_t length; /* length of the frame's payload in bytes */
+  uint32_t key;   /* a 32-bit key used to decrypt the frame's
+                   *   payload (provided per frame) */
+  uint16_t info;  /* the 16-bit frame header */
+  short off;      /* offset from star of frame to payload*/
+};
+
+/* 
+ * stores data parsed from an HTTP websocket request.
+ */
+struct webs_info {
+  char webs_key[24 + 1]; /* websocket key (base-64 encoded string) */
+  uint16_t webs_vrs;     /* websocket version (integer) */
+  uint16_t http_vrs;     /* HTTP version (concatonated chars) */
+  char req_type[8];
+  char path[256];
+};
 
 /* 
  * strcat that write result to a buffer...
@@ -718,12 +740,12 @@ static void* __webs_client_main(void* _self) {
     }
 
     /* only accept supported frames */
-    if (WEBSFR_GET_OPCODE(frm.info) != 0x0
-     && WEBSFR_GET_OPCODE(frm.info) != 0x1
-     && WEBSFR_GET_OPCODE(frm.info) != 0x2
-     && WEBSFR_GET_OPCODE(frm.info) != 0x8
-     && WEBSFR_GET_OPCODE(frm.info) != 0x9
-     && WEBSFR_GET_OPCODE(frm.info) != 0xA) {
+    if (WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_CONT
+     && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_TXT
+     && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_BIN
+     && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_CLSE
+     && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_PING
+     && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_PONG) {
       if (*self->srv->events.on_error)
         (*self->srv->events.on_error)(self, WEBS_ERR_NO_SUPPORT);
 
@@ -741,7 +763,7 @@ static void* __webs_client_main(void* _self) {
     }
 
     /* respond to ping */
-    if (WEBSFR_GET_OPCODE(frm.info) == 0x9) {
+    if (WEBSFR_GET_OPCODE(frm.info) == WS_FR_OP_PING) {
       __webs_flush(self, frm.off + frm.length - 2);
 
       if (*self->srv->events.on_ping)
@@ -754,7 +776,7 @@ static void* __webs_client_main(void* _self) {
     }
 
     /* handle pong */
-    if (WEBSFR_GET_OPCODE(frm.info) == 0xA) {
+    if (WEBSFR_GET_OPCODE(frm.info) == WS_FR_OP_PONG) {
       __webs_flush(self, frm.off + frm.length - 2);
 
       if (*self->srv->events.on_pong)
@@ -762,7 +784,7 @@ static void* __webs_client_main(void* _self) {
     }
 
     /* deal with normal frames (non-fragmented) */
-    if (WEBSFR_GET_OPCODE(frm.info) != 0x0) {
+    if (WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_CONT) {
       /* read data */
       if (data) free(data);
       data = malloc(frm.length + 1);
@@ -821,9 +843,9 @@ static void* __webs_client_main(void* _self) {
     }
 
     /* respond to close */
-    if (WEBSFR_GET_OPCODE(frm.info) == 0x8) {
+    if (WEBSFR_GET_OPCODE(frm.info) == WS_FR_OP_CLSE) {
       soc_buffer.len = __webs_make_frame(data, soc_buffer.data,
-        frm.length, 0x8, 0x1);
+        frm.length, WS_FR_OP_CLSE, 0x1);
 
       send(self->fd, soc_buffer.data, soc_buffer.len, 0);
 
@@ -951,7 +973,7 @@ void webs_close(webs_server* _srv) {
   return;
 }
 
-int webs_send(webs_client* _self, char* _data) {
+int webs_send(webs_client* _self, char* _data, int opcode) {
   /* general-purpose recv/send buffer */
   struct webs_buffer soc_buffer;
   int len = 0, i = 0, frame_count, rc;
@@ -971,7 +993,7 @@ int webs_send(webs_client* _self, char* _data) {
     rc = write(
       _self->fd,
       soc_buffer.data,
-      __webs_make_frame(_data, soc_buffer.data, len, 0x1, 0x1)
+      __webs_make_frame(_data, soc_buffer.data, len, opcode, 0x1)
     );
     pthread_mutex_unlock(&_self->mtx_snd);
     return rc;
@@ -981,7 +1003,7 @@ int webs_send(webs_client* _self, char* _data) {
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
     int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 4 : len % (WEBS_MAX_PACKET - 4);
-    uint8_t _op = i != 0 ? 0x0 : 0x1;
+    uint8_t _op = i != 0 ? 0x0 : opcode;
     uint8_t _fin = i != frame_count - 1 ? 0x0 : 0x1;
     memset(&buf, 0, sizeof(buf));
     memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 4)], size);
@@ -998,14 +1020,14 @@ int webs_send(webs_client* _self, char* _data) {
   pthread_mutex_unlock(&_self->mtx_snd);
   return 0;
 }
-int webs_broadcast(webs_client* _self, char* _data) {
+int webs_broadcast(webs_client* _self, char* _data, int opcode) {
   webs_client* node;
   if (!_self || !_self->srv) return -1;
   pthread_mutex_lock(&_self->srv->mtx);
   node = _self->srv->head;
   while (node) {
     if (node->id == _self->id) continue;
-    (void)webs_send(node, _data);
+    (void)webs_send(node, _data, opcode);
     node = node->next;
   }
   pthread_mutex_unlock(&_self->srv->mtx);
@@ -1015,7 +1037,7 @@ void * webs_get_context(webs_client* _self) {
   if (!_self || !_self->srv) return NULL;
   return _self->srv->data;
 }
-int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
+int webs_sendn(webs_client* _self, char* _data, ssize_t _n, int opcode) {
   /* general-purpose recv/send buffer */
   struct webs_buffer soc_buffer;
   int i = 0, frame_count = 0, rc;
@@ -1031,7 +1053,7 @@ int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
     rc = write(
       _self->fd,
       soc_buffer.data,
-      __webs_make_frame(_data, soc_buffer.data, _n, 0x1, 0x1)
+      __webs_make_frame(_data, soc_buffer.data, _n, opcode, 0x1)
     );
     pthread_mutex_unlock(&_self->mtx_snd);
     return rc;
@@ -1041,7 +1063,7 @@ int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
     int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 4 : _n % (WEBS_MAX_PACKET - 4);
-    uint8_t _op = i != 0 ? 0x0 : 0x1;
+    uint8_t _op = i != 0 ? 0x0 : opcode;
     uint8_t _fin = i != frame_count - 1 ? 0x0 : 0x1;
     memset(&buf, 0, sizeof(buf));
     memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 4)], size);
@@ -1058,45 +1080,45 @@ int webs_sendn(webs_client* _self, char* _data, ssize_t _n) {
   pthread_mutex_unlock(&_self->mtx_snd);
   return 0;
 }
-int webs_nbroadcast(webs_client* _self, char* _data, ssize_t _n) {
+int webs_nbroadcast(webs_client* _self, char* _data, ssize_t _n, int opcode) {
   webs_client* node;
   if (!_self || !_self->srv) return -1;
   pthread_mutex_lock(&_self->srv->mtx);
   node = _self->srv->head;
   while (node) {
     if (node->id == _self->id) continue;
-    (void)webs_sendn(node, _data, _n);
+    (void)webs_sendn(node, _data, _n, opcode);
     node = node->next;
   }
   pthread_mutex_unlock(&_self->srv->mtx);
   return 0;
 }
-int webs_sendall(webs_server* _srv, char* _data) {
+int webs_sendall(webs_server* _srv, char* _data, int opcode) {
   webs_client* node;
   if (!_srv) return -1;
   pthread_mutex_lock(&_srv->mtx);
   node = _srv->head;
   while (node) {
-    (void)webs_send(node, _data);
+    (void)webs_send(node, _data, opcode);
     node = node->next;
   }
   pthread_mutex_unlock(&_srv->mtx);
   return 0;
 }
-int webs_nsendall(webs_server* _srv, char* _data, ssize_t _n) {
+int webs_nsendall(webs_server* _srv, char* _data, ssize_t _n, int opcode) {
   webs_client* node;
   if (!_srv) return -1;
   pthread_mutex_lock(&_srv->mtx);
   node = _srv->head;
   while (node) {
-    (void)webs_sendn(node, _data, _n);
+    (void)webs_sendn(node, _data, _n, opcode);
     node = node->next;
   }
   pthread_mutex_unlock(&_srv->mtx);
   return 0;
 }
 void webs_pong(webs_client* _self) {
-  webs_sendn(_self, (char*) &WEBS_PONG, 2);
+  webs_sendn(_self, (char*) &WEBS_PONG, 2, WS_FR_OP_PONG);
   return;
 }
 

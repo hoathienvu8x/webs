@@ -20,6 +20,13 @@
 
 #define WEBS_MAX_PACKET 1024
 
+#define WS_FR_OP_CONT 0
+#define WS_FR_OP_TXT  1
+#define WS_FR_OP_BIN  2
+#define WS_FR_OP_CLSE 8
+#define WS_FR_OP_PING 0x9
+#define WS_FR_OP_PONG 0xA
+
 typedef struct webs_server webs_server;
 typedef struct webs_client webs_client;
 
@@ -32,28 +39,6 @@ enum webs_error {
   WEBS_ERR_UNEXPECTED_CONTINUTATION,
   WEBS_ERR_NO_SUPPORT,
   WEBS_ERR_OVERFLOW
-};
-
-/* 
- * stores header data from a websocket frame.
- */
-struct webs_frame {
-  ssize_t length; /* length of the frame's payload in bytes */
-  uint32_t key;   /* a 32-bit key used to decrypt the frame's
-                   *   payload (provided per frame) */
-  uint16_t info;  /* the 16-bit frame header */
-  short off;      /* offset from star of frame to payload*/
-};
-
-/* 
- * stores data parsed from an HTTP websocket request.
- */
-struct webs_info {
-  char webs_key[24 + 1]; /* websocket key (base-64 encoded string) */
-  uint16_t webs_vrs;     /* websocket version (integer) */
-  uint16_t http_vrs;     /* HTTP version (concatonated chars) */
-  char req_type[8];
-  char path[256];
 };
 
 /* 
@@ -140,8 +125,8 @@ void webs_close(webs_server* _srv);
  * that is to be sent.
  * @return the result of the write.
  */
-int webs_send(webs_client* _self, char* _data);
-int webs_broadcast(webs_client* _self, char* _data);
+int webs_send(webs_client* _self, char* _data, int opcode);
+int webs_broadcast(webs_client* _self, char* _data, int opcode);
 
 /**
  * user function used to send binary data over a websocket.
@@ -151,11 +136,11 @@ int webs_broadcast(webs_client* _self, char* _data);
  * @return the result of the write.
  */
 void * webs_get_context(webs_client* _self);
-int webs_sendn(webs_client* _self, char* _data, ssize_t _n);
-int webs_nbroadcast(webs_client* _self, char* _data, ssize_t _n);
+int webs_sendn(webs_client* _self, char* _data, ssize_t _n, int opcode);
+int webs_nbroadcast(webs_client* _self, char* _data, ssize_t _n, int opcode);
 
-int webs_sendall(webs_server* _srv, char* _data);
-int webs_nsendall(webs_server* _srv, char* _data, ssize_t _n);
+int webs_sendall(webs_server* _srv, char* _data, int opcode);
+int webs_nsendall(webs_server* _srv, char* _data, ssize_t _n, int opcode);
 /**
  * sends a pong frame to a client over a websocket.
  * @param _self: the client that the pong is to be sent to.
