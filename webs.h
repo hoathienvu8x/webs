@@ -125,8 +125,8 @@ void webs_close(webs_server* _srv);
  * that is to be sent.
  * @return the result of the write.
  */
-int webs_send(webs_client* _self, char* _data, int opcode);
-int webs_broadcast(webs_client* _self, char* _data, int opcode);
+int webs_send(webs_client* _self, const char* _data, int opcode);
+int webs_broadcast(webs_client* _self, const char* _data, int opcode);
 
 /**
  * user function used to send binary data over a websocket.
@@ -136,11 +136,11 @@ int webs_broadcast(webs_client* _self, char* _data, int opcode);
  * @return the result of the write.
  */
 void * webs_get_context(webs_client* _self);
-int webs_sendn(webs_client* _self, char* _data, ssize_t _n, int opcode);
-int webs_nbroadcast(webs_client* _self, char* _data, ssize_t _n, int opcode);
+int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode);
+int webs_nbroadcast(webs_client* _self, const char* _data, ssize_t _n, int opcode);
 
-int webs_sendall(webs_server* _srv, char* _data, int opcode);
-int webs_nsendall(webs_server* _srv, char* _data, ssize_t _n, int opcode);
+int webs_sendall(webs_server* _srv, const char* _data, int opcode);
+int webs_nsendall(webs_server* _srv, const char* _data, ssize_t _n, int opcode);
 /**
  * sends a pong frame to a client over a websocket.
  * @param _self: the client that the pong is to be sent to.

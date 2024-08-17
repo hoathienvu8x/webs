@@ -441,7 +441,8 @@ static int __webs_parse_frame(webs_client* _self, struct webs_frame* _frm) {
  * @param _op: the frame's opcode.
  * @return the total number of resulting bytes copied.
  */
-static int __webs_make_frame(char* _src, char* _dst, ssize_t _n, uint8_t _op, uint8_t _fin) {
+static int __webs_make_frame(const char* _src, char* _dst, ssize_t _n,
+    uint8_t _op, uint8_t _fin) {
   short data_start = 2;  /* offset to the start of the frame's payload */
   uint16_t hdr = 0;      /* the frame's header */
 
@@ -973,7 +974,7 @@ void webs_close(webs_server* _srv) {
   return;
 }
 
-int webs_send(webs_client* _self, char* _data, int opcode) {
+int webs_send(webs_client* _self, const char* _data, int opcode) {
   /* general-purpose recv/send buffer */
   struct webs_buffer soc_buffer;
   int len = 0, i = 0, frame_count, rc;
@@ -1020,7 +1021,7 @@ int webs_send(webs_client* _self, char* _data, int opcode) {
   pthread_mutex_unlock(&_self->mtx_snd);
   return 0;
 }
-int webs_broadcast(webs_client* _self, char* _data, int opcode) {
+int webs_broadcast(webs_client* _self, const char* _data, int opcode) {
   webs_client* node;
   if (!_self || !_self->srv) return -1;
   pthread_mutex_lock(&_self->srv->mtx);
@@ -1037,7 +1038,7 @@ void * webs_get_context(webs_client* _self) {
   if (!_self || !_self->srv) return NULL;
   return _self->srv->data;
 }
-int webs_sendn(webs_client* _self, char* _data, ssize_t _n, int opcode) {
+int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   /* general-purpose recv/send buffer */
   struct webs_buffer soc_buffer;
   int i = 0, frame_count = 0, rc;
@@ -1080,7 +1081,7 @@ int webs_sendn(webs_client* _self, char* _data, ssize_t _n, int opcode) {
   pthread_mutex_unlock(&_self->mtx_snd);
   return 0;
 }
-int webs_nbroadcast(webs_client* _self, char* _data, ssize_t _n, int opcode) {
+int webs_nbroadcast(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   webs_client* node;
   if (!_self || !_self->srv) return -1;
   pthread_mutex_lock(&_self->srv->mtx);
@@ -1093,7 +1094,7 @@ int webs_nbroadcast(webs_client* _self, char* _data, ssize_t _n, int opcode) {
   pthread_mutex_unlock(&_self->srv->mtx);
   return 0;
 }
-int webs_sendall(webs_server* _srv, char* _data, int opcode) {
+int webs_sendall(webs_server* _srv, const char* _data, int opcode) {
   webs_client* node;
   if (!_srv) return -1;
   pthread_mutex_lock(&_srv->mtx);
@@ -1105,7 +1106,7 @@ int webs_sendall(webs_server* _srv, char* _data, int opcode) {
   pthread_mutex_unlock(&_srv->mtx);
   return 0;
 }
-int webs_nsendall(webs_server* _srv, char* _data, ssize_t _n, int opcode) {
+int webs_nsendall(webs_server* _srv, const char* _data, ssize_t _n, int opcode) {
   webs_client* node;
   if (!_srv) return -1;
   pthread_mutex_lock(&_srv->mtx);
@@ -1192,7 +1193,7 @@ webs_server* webs_create(int _port, void * data) {
 
   server->soc = soc;
   server->data = data;
-  server->interval = 100;
+  server->interval = 1000000;
 
   server->head = server->tail = NULL;
 
