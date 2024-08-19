@@ -11,7 +11,7 @@ void myFuncZ(webs_client* self) {
   webs_send(self, "greetings, salutations!", WS_FR_OP_TXT);
 }
 
-void myFunc1(webs_client* self, int opcode, char* data, ssize_t len) {
+void myFunc1(webs_client* self, int opcode, const char* data, ssize_t len) {
   printf("opcode: %d\n", opcode);
   if (len < 16384)
     printf("server %ld: (id %ld) data [ %s ] (%lu bytes)\n", self->srv->id, self->id, data, len);
