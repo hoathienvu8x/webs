@@ -309,7 +309,10 @@ static int __webs_b64_encode(char* _s, char* _d, size_t _n) {
 
   return i + 4;
 }
-
+static int __webs_close_socket(int fd) {
+  shutdown(fd, SHUT_RDWR);
+  return close(fd);
+}
 /* 
  * wraper functon that deals with reading lage amounts
  * of data, as well as attemts to complete partial reads.
@@ -734,7 +737,7 @@ static void* __webs_client_main(void* _self) {
   soc_buffer.len = __webs_generate_handshake(soc_buffer.data,
     ws_info.webs_key);
 
-  if (send(self->fd, soc_buffer.data, soc_buffer.len, 0) <= 0)
+  if (__webs_asserted_write(self->fd, soc_buffer.data, soc_buffer.len) < 0)
     goto ABORT;
 
   __webs_set_client_state(self, 1);
@@ -792,6 +795,8 @@ static void* __webs_client_main(void* _self) {
 
       if (*self->srv->events.on_pong)
         (*self->srv->events.on_pong)(self);
+
+      continue;
     }
 
     /* deal with normal frames (non-fragmented) */
@@ -855,11 +860,12 @@ static void* __webs_client_main(void* _self) {
 
     /* respond to close */
     if (WEBSFR_GET_OPCODE(frm.info) == WS_FR_OP_CLSE) {
+      pthread_mutex_lock(&self->mtx_snd);
       soc_buffer.len = __webs_make_frame(data, soc_buffer.data,
         frm.length, WS_FR_OP_CLSE, 0x1);
 
-      send(self->fd, soc_buffer.data, soc_buffer.len, 0);
-
+      (void)__webs_asserted_write(self->fd, soc_buffer.data, soc_buffer.len);
+      pthread_mutex_unlock(&self->mtx_snd);
       error = 0;
       break;
     }
@@ -893,7 +899,7 @@ static void* __webs_client_main(void* _self) {
 
   ABORT:
 
-  close(self->fd);
+  __webs_close_socket(self->fd);
   __webs_remove_client(self);
 
   return NULL;
@@ -951,7 +957,7 @@ void webs_eject(webs_client* _self) {
   if (*_self->srv->events.on_close)
     (*_self->srv->events.on_close)(_self);
 
-  close(_self->fd);
+  __webs_close_socket(_self->fd);
   pthread_cancel(_self->thread);
   __webs_remove_client(_self);
 
@@ -968,16 +974,15 @@ void webs_close(webs_server* _srv) {
   if (_srv->thread)
     pthread_cancel(_srv->thread);
 
-  close(_srv->soc);
+  __webs_close_socket(_srv->soc);
 
-  pthread_mutex_lock(&_srv->mtx);
+  pthread_mutex_destroy(&_srv->mtx);
+
   while (node) {
     temp = node->next;
     webs_eject(node);
     node = temp;
   }
-  pthread_mutex_unlock(&_srv->mtx);
-  pthread_mutex_destroy(&_srv->mtx);
 
   free(_srv);
 
@@ -1132,13 +1137,13 @@ int webs_hold(webs_server* _srv) {
 }
 
 webs_server* webs_create(int _port, void * data) {
-    /* static id counter variable */
+  /* static id counter variable */
   static size_t server_id_counter = 0;
 
   const int ONE = 1;
   int error = 0, soc = -1;
   struct addrinfo hints, *results, *try;
-	char port[8] = {0};
+  char port[8] = {0};
 
   webs_server* server = malloc(sizeof(webs_server));
 
@@ -1146,44 +1151,44 @@ webs_server* webs_create(int _port, void * data) {
     WEBS_XERR("Failed to allocate memory!", ENOMEM);
 
   memset(&hints, 0, sizeof(struct addrinfo));
-	hints.ai_flags = AI_PASSIVE;
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
 
-	/* Port. */
-	error = snprintf(port, sizeof(port) - 1, "%d", _port);
+  /* Port. */
+  error = snprintf(port, sizeof(port) - 1, "%d", _port);
   if (error <= 0)
     WEBS_XERR("snprintf() failed", errno);
 
-	if (getaddrinfo(NULL, port, &hints, &results) != 0)
-		WEBS_XERR("getaddrinfo() failed", errno);
+  if (getaddrinfo(NULL, port, &hints, &results) != 0)
+    WEBS_XERR("getaddrinfo() failed", errno);
 
   for (try = results; try != NULL; try = try->ai_next) {
-		/* try to make a socket with this setup */
-		if ((soc = socket(try->ai_family, try->ai_socktype,
-			try->ai_protocol)) < 0) {
-			continue;
-		}
+    /* try to make a socket with this setup */
+    if ((soc = socket(try->ai_family, try->ai_socktype,
+      try->ai_protocol)) < 0) {
+      continue;
+    }
 
-		/* Reuse previous address. */
-		if (setsockopt(soc, SOL_SOCKET, SO_REUSEADDR, (const char *)&ONE,
-			sizeof(ONE)) < 0) {
-			WEBS_XERR("setsockopt(SO_REUSEADDR) failed", errno);
-		}
+    /* Reuse previous address. */
+    if (setsockopt(soc, SOL_SOCKET, SO_REUSEADDR, (const char *)&ONE,
+      sizeof(ONE)) < 0) {
+      WEBS_XERR("setsockopt(SO_REUSEADDR) failed", errno);
+    }
 
-		/* Bind. */
-		if (bind(soc, try->ai_addr, try->ai_addrlen) < 0)
-			WEBS_XERR("Bind failed", errno);
+    /* Bind. */
+    if (bind(soc, try->ai_addr, try->ai_addrlen) < 0)
+      WEBS_XERR("Bind failed", errno);
 
-		/* if it worked, we're done. */
-		break;
-	}
+    /* if it worked, we're done. */
+    break;
+  }
 
-	freeaddrinfo(results);
+  freeaddrinfo(results);
 
-	/* Check if binded with success. */
-	if (try == NULL)
-		WEBS_XERR("couldn't find a port to bind to", errno);
+  /* Check if binded with success. */
+  if (try == NULL)
+    WEBS_XERR("couldn't find a port to bind to", errno);
 
   error = listen(soc, WEBS_MAX_BACKLOG);
   if (error < 0) return NULL;
