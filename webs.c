@@ -335,7 +335,17 @@ static ssize_t __webs_asserted_read(webs_client* cli, void* _dst, size_t _n) {
 
   return (ssize_t)i;
 }
-
+static int __webs_asserted_write(int _fd, const void * _buf, size_t _len) {
+  size_t left = _len;
+  const char * buf = (const char *)_buf;
+  do {
+    ssize_t sent = send(_fd, buf, left, 0);
+    if (sent == -1) return -1;
+    left -= sent;
+    if (sent > 0) buf += sent;
+  } while (left > 0);
+  return (left == 0 ? (int)_len : -1);
+}
 /* 
  * decodes XOR encrypted data from a websocket frame.
  * @param _dta: a pointer to the data that is to be decrypted.
@@ -979,6 +989,7 @@ int webs_send(webs_client* _self, const char* _data, int opcode) {
   struct webs_buffer soc_buffer;
   int len = 0, i = 0, frame_count, rc;
   char buf[WEBS_MAX_PACKET];
+  size_t _len;
 
   memset(&soc_buffer, 0, sizeof(soc_buffer));
 
@@ -991,11 +1002,8 @@ int webs_send(webs_client* _self, const char* _data, int opcode) {
   if (len < WEBS_MAX_PACKET - 4) {
     /* write data */
     pthread_mutex_lock(&_self->mtx_snd);
-    rc = write(
-      _self->fd,
-      soc_buffer.data,
-      __webs_make_frame(_data, soc_buffer.data, len, opcode, 0x1)
-    );
+    _len = __webs_make_frame(_data, soc_buffer.data, len, opcode, 0x1);
+    rc = __webs_asserted_write(_self->fd, soc_buffer.data, _len);
     pthread_mutex_unlock(&_self->mtx_snd);
     return rc;
   }
@@ -1009,11 +1017,8 @@ int webs_send(webs_client* _self, const char* _data, int opcode) {
     memset(&buf, 0, sizeof(buf));
     memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 4)], size);
     buf[size] = '\0';
-    if (write(
-      _self->fd,
-      soc_buffer.data,
-      __webs_make_frame(buf, soc_buffer.data, size, _op, _fin)
-    ) < 0) {
+    _len = __webs_make_frame(buf, soc_buffer.data, size, _op, _fin);
+    if (__webs_asserted_write(_self->fd, soc_buffer.data, _len) < 0) {
       pthread_mutex_unlock(&_self->mtx_snd);
       return -1;
     }
@@ -1043,6 +1048,7 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   struct webs_buffer soc_buffer;
   int i = 0, frame_count = 0, rc;
   char buf[WEBS_MAX_PACKET];
+  size_t _len;
 
   memset(&soc_buffer, 0, sizeof(soc_buffer));
 
@@ -1051,11 +1057,8 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   if (!_data || !*_data) return 0;
   if (_n < WEBS_MAX_PACKET - 4) {
     pthread_mutex_lock(&_self->mtx_snd);
-    rc = write(
-      _self->fd,
-      soc_buffer.data,
-      __webs_make_frame(_data, soc_buffer.data, _n, opcode, 0x1)
-    );
+    _len = __webs_make_frame(_data, soc_buffer.data, _n, opcode, 0x1);
+    rc = __webs_asserted_write(_self->fd, soc_buffer.data, _len);
     pthread_mutex_unlock(&_self->mtx_snd);
     return rc;
   }
@@ -1069,11 +1072,8 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
     memset(&buf, 0, sizeof(buf));
     memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 4)], size);
     buf[size] = '\0';
-    if (write(
-      _self->fd,
-      soc_buffer.data,
-      __webs_make_frame(buf, soc_buffer.data, size, _op, _fin)
-    ) < 0) {
+    _len = __webs_make_frame(buf, soc_buffer.data, size, _op, _fin);
+    if (__webs_asserted_write(_self->fd, soc_buffer.data, _len) < 0) {
       pthread_mutex_unlock(&_self->mtx_snd);
       return -1;
     }
