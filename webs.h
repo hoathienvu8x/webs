@@ -116,6 +116,7 @@ void webs_eject(webs_client* _self);
  * @param _srv: the server that is to be shut down.
  */
 void webs_close(webs_server* _srv);
+int webs_send_close(webs_client* _self, const char * reason);
 
 /**
  * user function used to send null-terminated data over a

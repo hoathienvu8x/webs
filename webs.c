@@ -328,8 +328,8 @@ static ssize_t __webs_asserted_read(webs_client* cli, void* _dst, size_t _n) {
   for (; i < _n; i++) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
       memset(&cli->buf, 0, sizeof(cli->buf));
-      n = read(cli->fd, cli->buf.data, sizeof(cli->buf.data));
-      if (n < 0) return -1;
+      n = recv(cli->fd, cli->buf.data, sizeof(cli->buf.data), 0);
+      if (n <= 0) return -1;
       cli->buf.pos = 0;
       cli->buf.len = (size_t)n;
     }
@@ -376,8 +376,8 @@ static size_t __webs_flush(webs_client* cli, size_t _n) {
   for (; i < _n; i++) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
       memset(&cli->buf, 0, sizeof(cli->buf));
-      n = read(cli->fd, cli->buf.data, sizeof(cli->buf.data));
-      if (n < 0) return -1;
+      n = recv(cli->fd, cli->buf.data, sizeof(cli->buf.data), 0);
+      if (n <= 0) return -1;
       cli->buf.pos = 0;
       cli->buf.len = (size_t)n;
     }
@@ -988,7 +988,9 @@ void webs_close(webs_server* _srv) {
 
   return;
 }
-
+int webs_send_close(webs_client* _self, const char * reason) {
+  return webs_send(_self, reason, WS_FR_OP_CLSE);
+}
 int webs_send(webs_client* _self, const char* _data, int opcode) {
   /* general-purpose recv/send buffer */
   struct webs_buffer soc_buffer;
