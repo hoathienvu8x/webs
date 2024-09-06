@@ -2,6 +2,10 @@
 #include <math.h>
 #include <netdb.h>
 
+#define WS_STATE_CONNECTING 0
+#define WS_STATE_OPEN       1
+#define WS_STATE_CLOSING    2
+#define WS_STATE_CLOSED     3
 /* 
  * macros to report runtime errors...
  */
@@ -740,7 +744,7 @@ static void* __webs_client_main(void* _self) {
   if (__webs_asserted_write(self->fd, soc_buffer.data, soc_buffer.len) < 0)
     goto ABORT;
 
-  __webs_set_client_state(self, 1);
+  __webs_set_client_state(self, WS_STATE_OPEN);
 
   /* call client on_open function */
   if (*self->srv->events.on_open)
@@ -890,12 +894,12 @@ static void* __webs_client_main(void* _self) {
       (*self->srv->events.on_error)(self, error);
   }
 
-  __webs_set_client_state(self, 2);
+  __webs_set_client_state(self, WS_STATE_CLOSING);
 
   if (*self->srv->events.on_close)
     (*self->srv->events.on_close)(self);
 
-  __webs_set_client_state(self, 3);
+  __webs_set_client_state(self, WS_STATE_CLOSED);
 
   ABORT:
 
@@ -945,6 +949,7 @@ static void* __webs_main(void* _srv) {
 
     if (user_ptr->fd >= 0) {
       __webs_add_client(srv, user_ptr);
+      __webs_set_client_state(user_ptr, WS_STATE_CONNECTING);
       if (pthread_create(&user_ptr->thread, 0, __webs_client_main, user_ptr))
         WEBS_XERR("Could not create the client thread!", ENOMEM);
     }
@@ -954,8 +959,11 @@ static void* __webs_main(void* _srv) {
 }
 
 void webs_eject(webs_client* _self) {
+  __webs_set_client_state(_self, WS_STATE_CLOSING);
   if (*_self->srv->events.on_close)
     (*_self->srv->events.on_close)(_self);
+
+  __webs_set_client_state(_self, WS_STATE_CLOSED);
 
   __webs_close_socket(_self->fd);
   pthread_cancel(_self->thread);
@@ -1000,7 +1008,7 @@ int webs_send(webs_client* _self, const char* _data, int opcode) {
 
   memset(&soc_buffer, 0, sizeof(soc_buffer));
 
-  if (__webs_get_client_state(_self) != 1) return 0;
+  if (__webs_get_client_state(_self) != WS_STATE_OPEN) return 0;
   /* check for nullptr or empty string */
   if (!_data || !*_data) return 0;
 
@@ -1059,7 +1067,7 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
 
   memset(&soc_buffer, 0, sizeof(soc_buffer));
 
-  if (__webs_get_client_state(_self) != 1) return 0;
+  if (__webs_get_client_state(_self) != WS_STATE_OPEN) return 0;
   /* check for NULL or empty string */
   if (!_data || !*_data) return 0;
   if (_n < WEBS_MAX_PACKET - 4) {
