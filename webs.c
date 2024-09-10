@@ -1,7 +1,6 @@
 #include "webs.h"
 #include <math.h>
 #include <netdb.h>
-#include <signal.h>
 
 #define WS_STATE_CONNECTING 0
 #define WS_STATE_OPEN       1
@@ -314,10 +313,7 @@ static int __webs_b64_encode(char* _s, char* _d, size_t _n) {
 
   return i + 4;
 }
-static void __webs_broken_pipe(int sig) {
-  (void)sig;
-  WEBS_XERR("Broken pipe.", EPIPE);
-}
+
 static int __webs_close_socket(int fd) {
   shutdown(fd, SHUT_RDWR);
   return close(fd);
@@ -351,7 +347,7 @@ static int __webs_asserted_write(int _fd, const void * _buf, size_t _len) {
   size_t left = _len;
   const char * buf = (const char *)_buf;
   do {
-    ssize_t sent = send(_fd, buf, left, 0);
+    ssize_t sent = send(_fd, buf, left, MSG_NOSIGNAL);
     if (sent == -1) return -1;
     left -= sent;
     if (sent > 0) buf += sent;
@@ -689,7 +685,6 @@ static void* __webs_client_main(void* _self) {
   webs_client* self = (webs_client*) _self;
   ssize_t total = 0, _n = -1;
   ssize_t error;
-  struct sigaction sig;
 
   /* flag set if frame is a continuation one */
   int cont = 0;
@@ -705,11 +700,6 @@ static void* __webs_client_main(void* _self) {
   memset(&soc_buffer, 0, sizeof(soc_buffer));
   memset(&ws_info, 0, sizeof(ws_info));
   memset(&frm, 0, sizeof(frm));
-
-  sig.sa_handler = __webs_broken_pipe;
-  sigemptyset(&sig.sa_mask);
-  sig.sa_flags = 0;
-  sigaction(SIGPIPE, &sig, NULL);
 
   /* wait for HTTP websocket request header */
   do {
@@ -935,14 +925,8 @@ static void * __webs_periodic(void * _srv) {
  * @param _srv: the server that is calling.
  */
 static void* __webs_main(void* _srv) {
-  struct sigaction sig;
   webs_server* srv = (webs_server*) _srv;
   webs_client* user_ptr;
-
-  sig.sa_handler = __webs_broken_pipe;
-  sigemptyset(&sig.sa_mask);
-  sig.sa_flags = 0;
-  sigaction(SIGPIPE, &sig, NULL);
 
   if (*srv->events.on_periodic && srv->interval > 0)
     pthread_create(&srv->periodic, 0, __webs_periodic, srv);
