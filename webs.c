@@ -313,7 +313,20 @@ static int __webs_b64_encode(char* _s, char* _d, size_t _n) {
 
   return i + 4;
 }
-
+static void nsleep(long msec) {
+  struct timespec ts;
+  int res;
+  if (msec < 0) {
+    errno = EINVAL;
+    return;
+  }
+  ts.tv_sec = msec / 1000;
+  ts.tv_nsec = (msec % 1000) * 1000000;
+  do {
+    res = nanosleep(&ts, &ts);
+  } while (res && errno == EINTR);
+  (void)res;
+}
 static int __webs_close_socket(int fd) {
   shutdown(fd, SHUT_RDWR);
   return close(fd);
@@ -668,7 +681,10 @@ static int __webs_accept_connection(int _soc, webs_client* _c) {
   socklen_t addr_size = sizeof(_c->addr);
 
   _c->fd = accept(_soc, (struct sockaddr*) &_c->addr, &addr_size);
-  if (_c->fd < 0) return -1;
+  if (_c->fd < 0) {
+    WEBS_XERR("Error on accepting connections..", errno);
+    return -1;
+  }
 
   _c->id = client_id_counter;
   client_id_counter++;
@@ -913,7 +929,7 @@ static void* __webs_client_main(void* _self) {
 static void * __webs_periodic(void * _srv) {
   webs_server * srv = (webs_server*) _srv;
   for (;;) {
-    usleep(srv->interval);
+    nsleep((long)srv->interval);
     (*srv->events.on_periodic)(srv);
   }
   return NULL;
