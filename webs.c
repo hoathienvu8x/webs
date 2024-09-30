@@ -314,18 +314,27 @@ static int __webs_b64_encode(char* _s, char* _d, size_t _n) {
   return i + 4;
 }
 static void nsleep(long msec) {
-  struct timespec ts;
-  int res;
-  if (msec < 0) {
+  struct timespec ts, rs;
+  int rc = -1;
+  if (msec <= 0) {
     errno = EINVAL;
     return;
   }
-  ts.tv_sec = msec / 1000;
-  ts.tv_nsec = (msec % 1000) * 1000000;
+  memset(&ts, 0, sizeof(ts));
+  memset(&rs, 0, sizeof(rs));
+  /* https://stackoverflow.com/a/26064185 */
+  /* https://stackoverflow.com/a/33412806 */
+  if (msec > 999) {
+    ts.tv_sec = (int)(msec / 1000);
+    ts.tv_nsec = (msec % 1000) * 1000000;
+  } else {
+    ts.tv_sec = 0;
+    ts.tv_nsec = msec * 1000000;
+  }
   do {
-    res = nanosleep(&ts, &ts);
-  } while (res && errno == EINTR);
-  (void)res;
+    rs = ts;
+    rc = nanosleep(&rs, &ts);
+  } while (rc == -1 && errno == EINTR);
 }
 static int __webs_close_socket(int fd) {
   shutdown(fd, SHUT_RDWR);
