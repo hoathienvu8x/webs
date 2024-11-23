@@ -16,7 +16,7 @@ compile:
 	@echo "CC     = ${CC}"
 	@echo
 	
-	$(CC) -c *.c examples/test.c $(CFLAGS) -std=$(STD)
+	$(CC) -c *.c examples/test.c $(CFLAGS) -std=$(STD) -DVALIDATE_UTF8=1
 
 build: compile
 	$(CC) -o webs *.o -lpthread -lm

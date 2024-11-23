@@ -15,19 +15,39 @@
 
 #if __STDC_VERSION__ > 199409L
   #ifdef NOESCAPE
-    #define WEBS_XERR(MESG, ERR) { printf("Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", func: %s [line "__WEBS_XE_PASTE(__LINE__)"]) : "MESG"\n", __func__); exit(ERR); }
+    #define WEBS_XERR(MESG, ERR) { \
+      printf( \
+        "Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", func: %s [line " \
+        __WEBS_XE_PASTE(__LINE__)"]) : "MESG"\n", __func__); exit(ERR); \
+      }
   #else
-    #define WEBS_XERR(MESG, ERR) { printf("\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__)", func: \x1b[1m%s\x1b[0m [line \x1b[1m"__WEBS_XE_PASTE(__LINE__)"\x1b[0m]) : "MESG"\n", __func__); exit(ERR); }
+    #define WEBS_XERR(MESG, ERR) { \
+      printf( \
+        "\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__) \
+        ", func: \x1b[1m%s\x1b[0m [line \x1b[1m"__WEBS_XE_PASTE(__LINE__) \
+        "\x1b[0m]) : "MESG"\n", __func__); exit(ERR); \
+      }
   #endif
 #else
   #ifdef NOESCAPE
-    #define WEBS_XERR(MESG, ERR) { printf("Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", line "__WEBS_XE_PASTE(__LINE__)") : "MESG"\n"); exit(ERR); }
+    #define WEBS_XERR(MESG, ERR) { \
+      printf( \
+        "Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", line " \
+        __WEBS_XE_PASTE(__LINE__)") : "MESG"\n"); exit(ERR); \
+      }
   #else
-    #define WEBS_XERR(MESG, ERR) { printf("\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__)", line \x1b[1m"__WEBS_XE_PASTE(__LINE__)"\x1b[0m) : "MESG"\n"); exit(ERR); }
+    #define WEBS_XERR(MESG, ERR) { \
+      printf( \
+        "\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__) \
+        ", line \x1b[1m"__WEBS_XE_PASTE(__LINE__) \
+        "\x1b[0m) : "MESG"\n"); exit(ERR); \
+      }
   #endif
 #endif
-
-
+#ifdef VALIDATE_UTF8
+#define IS_CONT(b) (((unsigned char)(b) & 0xC0) == 0x80)
+#define WS_CLSE_INVUTF8 1007
+#endif
 /* 
  * declare endian-independant macros
  * http://www.yolinux.com/TUTORIALS/Endian-Byte-Order.html
@@ -87,7 +107,9 @@
 /* 
  * HTTP response format for confirming a websocket connection.
  */
-#define WEBS_RESPONSE_FMT "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n"
+#define WEBS_RESPONSE_FMT "HTTP/1.1 101 Switching Protocols\r\n" \
+                          "Upgrade: websocket\r\nConnection: Upgrade\r\n" \
+                          "Sec-WebSocket-Accept: %s\r\n\r\n"
 
 /* 
  * macro to convert an integer to its base-64 representation.
@@ -340,6 +362,56 @@ static int __webs_close_socket(int fd) {
   shutdown(fd, SHUT_RDWR);
   return close(fd);
 }
+#ifdef VALIDATE_UTF8
+static int num_bytes_in_utf8_sequence(unsigned char c) {
+  if (c == 0xC0 || c == 0xC1 || c > 0xF4 || IS_CONT(c)) return 0;
+  if ((c & 0x80) == 0) return 1;
+  if ((c & 0xE0) == 0xC0) return 2;
+  if ((c & 0xF0) == 0xE0) return 3;
+  if ((c & 0xF8) == 0xF0) return 4;
+  return 0;
+}
+
+static int verify_utf8_sequence(const unsigned char * str, int * len) {
+  unsigned int cp = 0;
+  *len = num_bytes_in_utf8_sequence(str[0]);
+  if (*len == 1) {
+    cp = str[0];
+  } else if (*len == 2 && IS_CONT(str[1])) {
+    cp = str[0] & 0x1f;
+    cp = (cp << 6) | (str[1] & 0x3f);
+  } else if (*len == 3 && IS_CONT(str[1]) && IS_CONT(str[2])) {
+    cp = ((unsigned char)str[0]) & 0xf;
+    cp = (cp << 6) | (str[1] & 0x3f);
+    cp = (cp << 6) | (str[2] & 0x3f);
+  } else if (*len == 4 && IS_CONT(str[1]) && IS_CONT(str[2]) && IS_CONT(str[3])) {
+    cp = str[0] & 0x7;
+    cp = (cp << 6) | (str[1] & 0x3f);
+    cp = (cp << 6) | (str[2] & 0x3f);
+    cp = (cp << 6) | (str[3] & 0x3f);
+  } else {
+    return -1;
+  }
+  if ((cp < 0x80 && *len > 1) || (cp < 0x800 && *len > 2) || (cp < 0x10000 && *len > 3)) {
+    return -1;
+  }
+  if (cp > 0x10FFFF) return -1;
+  if (cp >= 0xD800 && cp <= 0xDFFF) return -1;
+  return 0;
+}
+
+static int is_valid_utf8(const char * str, size_t len) {
+  int bytes = 0;
+  const char * end = str + len;
+  while (str < end) {
+    if (verify_utf8_sequence((const unsigned char *)str, &bytes) != 0) {
+      return -1;
+    }
+    str += bytes;
+  }
+  return 0;
+}
+#endif
 /* 
  * wraper functon that deals with reading lage amounts
  * of data, as well as attemts to complete partial reads.
@@ -722,6 +794,12 @@ static void* __webs_client_main(void* _self) {
   struct webs_frame frm;
   char* data = 0;
 
+  #ifdef VALIDATE_UTF8
+  uint8_t ctrl[3] = {
+    (WS_CLSE_INVUTF8 >> 8), (WS_CLSE_INVUTF8 & 0xff), '\0'
+  };
+  #endif
+
   memset(&soc_buffer, 0, sizeof(soc_buffer));
   memset(&ws_info, 0, sizeof(ws_info));
   memset(&frm, 0, sizeof(frm));
@@ -860,14 +938,21 @@ static void* __webs_client_main(void* _self) {
       if (data == NULL)
         WEBS_XERR("Failed to allocate memory!", ENOMEM);
 
-      if (__webs_asserted_read(self, data + total,
-      frm.length) < 0) {
+      if (__webs_asserted_read(self, data + total, frm.length) < 0) {
         error = WEBS_ERR_READ_FAILED;
         free(data);
         break;
       }
 
       __webs_decode_data(data + total, frm.key, frm.length);
+
+      #ifdef VALIDATE_UTF8
+      if (is_valid_utf8(data + total, frm.length) < 0) {
+        free(data);
+        webs_send(self, (const char *)ctrl, WS_FR_OP_CLSE);
+        goto ABORT;
+      }
+      #endif
 
       total += frm.length;
 
@@ -881,8 +966,7 @@ static void* __webs_client_main(void* _self) {
      * set error and skip the frame */
     else {
       if (*self->srv->events.on_error)
-        (*self->srv->events.on_error)(self,
-          WEBS_ERR_UNEXPECTED_CONTINUTATION);
+        (*self->srv->events.on_error)(self, WEBS_ERR_UNEXPECTED_CONTINUTATION);
 
       __webs_flush(self, frm.off + frm.length - 2);
       continue;
@@ -904,8 +988,20 @@ static void* __webs_client_main(void* _self) {
     data[total] = '\0';
 
     if (data) {
+      #ifdef VALIDATE_UTF8
+      if (
+        WEBSFR_GET_OPCODE(frm.info) == WS_FR_OP_TXT &&
+        is_valid_utf8(data, total) < 0
+      ) {
+        free(data);
+        webs_send(self, (const char *)ctrl, WS_FR_OP_CLSE);
+        goto ABORT;
+      }
+      #endif
       if (*self->srv->events.on_data)
-        (*self->srv->events.on_data)(self, WEBSFR_GET_OPCODE(frm.info), data, total);
+        (*self->srv->events.on_data)(
+          self, WEBSFR_GET_OPCODE(frm.info), data, total
+        );
     }
 
     free(data);
