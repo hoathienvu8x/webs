@@ -138,6 +138,17 @@ uint8_t WEBSFR_FINISH_MASK[2] = {0x80, 0x00};
 uint8_t WEBSFR_RESVRD_MASK[2] = {0x70, 0x00};
 
 
+#define __webs_dispose(p) do { \
+  if((p)) {                    \
+    free((p));                 \
+    (p) = NULL;                \
+  }                            \
+} while (0)
+
+#define __webs_malloc(sz) malloc(sz)
+#define __webs_realloc(dst,sz) realloc(dst, sz)
+#define __webs_bzero(dst,sz) memset(dst, 0, sz)
+
 /* 
  * stores header data from a websocket frame.
  */
@@ -342,8 +353,8 @@ static void nsleep(long msec) {
     errno = EINVAL;
     return;
   }
-  memset(&ts, 0, sizeof(ts));
-  memset(&rs, 0, sizeof(rs));
+  __webs_bzero(&ts, sizeof(ts));
+  __webs_bzero(&rs, sizeof(rs));
   /* https://stackoverflow.com/a/26064185 */
   /* https://stackoverflow.com/a/33412806 */
   if (msec > 999) {
@@ -426,7 +437,7 @@ static ssize_t __webs_asserted_read(webs_client* cli, void* _dst, size_t _n) {
 
   for (; i < _n; i++) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
-      memset(&cli->buf, 0, sizeof(cli->buf));
+      __webs_bzero(&cli->buf, sizeof(cli->buf));
       n = recv(cli->fd, cli->buf.data, sizeof(cli->buf.data), 0);
       if (n <= 0) return -1;
       cli->buf.pos = 0;
@@ -474,7 +485,7 @@ static size_t __webs_flush(webs_client* cli, size_t _n) {
   ssize_t n = -1;
   for (; i < _n; i++) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
-      memset(&cli->buf, 0, sizeof(cli->buf));
+      __webs_bzero(&cli->buf, sizeof(cli->buf));
       n = recv(cli->fd, cli->buf.data, sizeof(cli->buf.data), 0);
       if (n <= 0) return -1;
       cli->buf.pos = 0;
@@ -713,7 +724,7 @@ static void __webs_remove_client(webs_client* _node) {
   pthread_mutex_destroy(&_node->mtx_sta);
   pthread_mutex_destroy(&_node->mtx_snd);
 
-  free(_node);
+  __webs_dispose(_node);
 
   return;
 }
@@ -800,9 +811,9 @@ static void* __webs_client_main(void* _self) {
   };
   #endif
 
-  memset(&soc_buffer, 0, sizeof(soc_buffer));
-  memset(&ws_info, 0, sizeof(ws_info));
-  memset(&frm, 0, sizeof(frm));
+  __webs_bzero(&soc_buffer, sizeof(soc_buffer));
+  __webs_bzero(&ws_info, sizeof(ws_info));
+  __webs_bzero(&frm, sizeof(frm));
 
   /* wait for HTTP websocket request header */
   do {
@@ -910,15 +921,15 @@ static void* __webs_client_main(void* _self) {
     /* deal with normal frames (non-fragmented) */
     if (WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_CONT) {
       /* read data */
-      if (data) free(data);
-      data = malloc(frm.length + 1);
+      if (data) __webs_dispose(data);
+      data = __webs_malloc(frm.length + 1);
 
       if (data == NULL)
         WEBS_XERR("Failed to allocate memory!", ENOMEM);
 
       if (__webs_asserted_read(self, data, frm.length) < 0) {
         error = WEBS_ERR_READ_FAILED;
-        free(data);
+        __webs_dispose(data);
         break;
       }
 
@@ -933,14 +944,14 @@ static void* __webs_client_main(void* _self) {
 
     /* otherwise deal with fragmentation */
     else if (cont == 1) {
-      data = realloc(data, total + frm.length);
+      data = __webs_realloc(data, total + frm.length);
 
       if (data == NULL)
         WEBS_XERR("Failed to allocate memory!", ENOMEM);
 
       if (__webs_asserted_read(self, data + total, frm.length) < 0) {
         error = WEBS_ERR_READ_FAILED;
-        free(data);
+        __webs_dispose(data);
         break;
       }
 
@@ -948,7 +959,7 @@ static void* __webs_client_main(void* _self) {
 
       #ifdef VALIDATE_UTF8
       if (is_valid_utf8(data + total, frm.length) < 0) {
-        free(data);
+        __webs_dispose(data);
         webs_send(self, (const char *)ctrl, WS_FR_OP_CLSE);
         goto ABORT;
       }
@@ -993,7 +1004,7 @@ static void* __webs_client_main(void* _self) {
         WEBSFR_GET_OPCODE(frm.info) == WS_FR_OP_TXT &&
         is_valid_utf8(data, total) < 0
       ) {
-        free(data);
+        __webs_dispose(data);
         webs_send(self, (const char *)ctrl, WS_FR_OP_CLSE);
         goto ABORT;
       }
@@ -1004,7 +1015,7 @@ static void* __webs_client_main(void* _self) {
         );
     }
 
-    free(data);
+    __webs_dispose(data);
 
     data = 0;
     continue;
@@ -1053,7 +1064,7 @@ static void* __webs_main(void* _srv) {
     pthread_create(&srv->periodic, 0, __webs_periodic, srv);
 
   for (;;) {
-    user_ptr = malloc(sizeof(webs_client));
+    user_ptr = __webs_malloc(sizeof(webs_client));
     if (!user_ptr)
       WEBS_XERR("Failed to allocate memory!", ENOMEM);
 
@@ -1065,7 +1076,7 @@ static void* __webs_main(void* _srv) {
 
     user_ptr->fd = __webs_accept_connection(srv->soc, user_ptr);
     user_ptr->srv = srv;
-    memset(&user_ptr->buf, 0, sizeof(user_ptr->buf));
+    __webs_bzero(&user_ptr->buf, sizeof(user_ptr->buf));
 
     user_ptr->next = user_ptr->prev = NULL;
 
@@ -1112,52 +1123,16 @@ void webs_close(webs_server* _srv) {
     node = temp;
   }
 
-  free(_srv);
+  __webs_dispose(_srv);
 }
 int webs_send_close(webs_client* _self, const char * reason) {
   return webs_send(_self, reason, WS_FR_OP_CLSE);
 }
 int webs_send(webs_client* _self, const char* _data, int opcode) {
-  /* general-purpose recv/send buffer */
-  struct webs_buffer soc_buffer;
-  int len = 0, i = 0, frame_count, rc;
-  char buf[WEBS_MAX_PACKET];
-  size_t _len;
-
-  memset(&soc_buffer, 0, sizeof(soc_buffer));
-
   if (__webs_get_client_state(_self) != WS_STATE_OPEN) return 0;
   /* check for nullptr or empty string */
   if (!_data || !*_data) return 0;
-
-  /* get length of data */
-  while (_data[++len]);
-  if (len < WEBS_MAX_PACKET - 4) {
-    /* write data */
-    pthread_mutex_lock(&_self->mtx_snd);
-    _len = __webs_make_frame(_data, soc_buffer.data, len, opcode, 0x1);
-    rc = __webs_asserted_write(_self->fd, soc_buffer.data, _len);
-    pthread_mutex_unlock(&_self->mtx_snd);
-    return rc;
-  }
-  pthread_mutex_lock(&_self->mtx_snd);
-  frame_count = ceil((float)len / (float)(WEBS_MAX_PACKET - 4));
-  if (frame_count == 0) frame_count = 1;
-  for (; i < frame_count; i++) {
-    int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 4 : len % (WEBS_MAX_PACKET - 4);
-    uint8_t _op = i != 0 ? 0x0 : opcode;
-    uint8_t _fin = i != frame_count - 1 ? 0x0 : 0x1;
-    memset(&buf, 0, sizeof(buf));
-    memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 4)], size);
-    buf[size] = '\0';
-    _len = __webs_make_frame(buf, soc_buffer.data, size, _op, _fin);
-    if (__webs_asserted_write(_self->fd, soc_buffer.data, _len) < 0) {
-      pthread_mutex_unlock(&_self->mtx_snd);
-      return -1;
-    }
-  }
-  pthread_mutex_unlock(&_self->mtx_snd);
-  return 0;
+  return webs_sendn(_self, _data, strlen(_data), opcode);
 }
 int webs_broadcast(webs_client* _self, const char* _data, int opcode) {
   webs_client* node;
@@ -1183,7 +1158,7 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   char buf[WEBS_MAX_PACKET];
   size_t _len;
 
-  memset(&soc_buffer, 0, sizeof(soc_buffer));
+  __webs_bzero(&soc_buffer, sizeof(soc_buffer));
 
   if (__webs_get_client_state(_self) != WS_STATE_OPEN) return 0;
   /* check for NULL or empty string */
@@ -1202,7 +1177,7 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
     int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 4 : _n % (WEBS_MAX_PACKET - 4);
     uint8_t _op = i != 0 ? 0x0 : opcode;
     uint8_t _fin = i != frame_count - 1 ? 0x0 : 0x1;
-    memset(&buf, 0, sizeof(buf));
+    __webs_bzero(&buf, sizeof(buf));
     memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 4)], size);
     buf[size] = '\0';
     _len = __webs_make_frame(buf, soc_buffer.data, size, _op, _fin);
@@ -1273,12 +1248,12 @@ webs_server* webs_create(int _port, void * data) {
   struct addrinfo hints, *results, *try;
   char port[8] = {0};
 
-  webs_server* server = malloc(sizeof(webs_server));
+  webs_server* server = __webs_malloc(sizeof(webs_server));
 
   if (server == NULL)
     WEBS_XERR("Failed to allocate memory!", ENOMEM);
 
-  memset(&hints, 0, sizeof(struct addrinfo));
+  __webs_bzero(&hints, sizeof(struct addrinfo));
   hints.ai_flags = AI_PASSIVE;
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
