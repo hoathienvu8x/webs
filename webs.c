@@ -1129,9 +1129,6 @@ int webs_send_close(webs_client* _self, const char * reason) {
   return webs_send(_self, reason, WS_FR_OP_CLSE);
 }
 int webs_send(webs_client* _self, const char* _data, int opcode) {
-  if (__webs_get_client_state(_self) != WS_STATE_OPEN) return 0;
-  /* check for nullptr or empty string */
-  if (!_data || !*_data) return 0;
   return webs_sendn(_self, _data, strlen(_data), opcode);
 }
 int webs_broadcast(webs_client* _self, const char* _data, int opcode) {
