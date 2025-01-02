@@ -2,6 +2,8 @@
 #include <math.h>
 #include <netdb.h>
 
+#define WEBS_MAX_PAD (WEBS_MAX_PACKET - 11)
+
 #define WS_STATE_CONNECTING 0
 #define WS_STATE_OPEN       1
 #define WS_STATE_CLOSING    2
@@ -439,7 +441,7 @@ static ssize_t __webs_asserted_read(webs_client* cli, void* _dst, size_t _n) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
       __webs_bzero(&cli->buf, sizeof(cli->buf));
       n = recv(cli->fd, cli->buf.data, sizeof(cli->buf.data), 0);
-      if (n <= 0) return -1;
+      if (n <= 0) return n;
       cli->buf.pos = 0;
       cli->buf.len = (size_t)n;
     }
@@ -480,20 +482,20 @@ static int __webs_decode_data(char* _dta, uint32_t _key, ssize_t _n) {
  * @param _fd: the descritor whos buffer is to be emptied.
  * @return the number of bytes successfully processed.
  */
-static size_t __webs_flush(webs_client* cli, size_t _n) {
+static ssize_t __webs_flush(webs_client* cli, size_t _n) {
   size_t i = 0;
   ssize_t n = -1;
   for (; i < _n; i++) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
       __webs_bzero(&cli->buf, sizeof(cli->buf));
       n = recv(cli->fd, cli->buf.data, sizeof(cli->buf.data), 0);
-      if (n <= 0) return -1;
+      if (n <= 0) return n;
       cli->buf.pos = 0;
       cli->buf.len = (size_t)n;
     }
     cli->buf.pos++;
   }
-  return i;
+  return (ssize_t)i;
 }
 
 /* 
@@ -1158,9 +1160,10 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   __webs_bzero(&soc_buffer, sizeof(soc_buffer));
 
   if (__webs_get_client_state(_self) != WS_STATE_OPEN) return 0;
+  /* len < 126 -> index = 2, len = 126 -> index = 4, len > 126 -> index = 10 */
   /* check for NULL or empty string */
   if (!_data || !*_data) return 0;
-  if (_n < WEBS_MAX_PACKET - 4) {
+  if (_n < WEBS_MAX_PAD) {
     pthread_mutex_lock(&_self->mtx_snd);
     _len = __webs_make_frame(_data, soc_buffer.data, _n, opcode, 0x1);
     rc = __webs_asserted_write(_self->fd, soc_buffer.data, _len);
@@ -1168,14 +1171,14 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
     return rc;
   }
   pthread_mutex_lock(&_self->mtx_snd);
-  frame_count = ceil((float)_n / (float)(WEBS_MAX_PACKET - 4));
+  frame_count = ceil((float)_n / (float)(WEBS_MAX_PAD));
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
-    int size = i != frame_count - 1 ? WEBS_MAX_PACKET - 4 : _n % (WEBS_MAX_PACKET - 4);
+    int size = i != frame_count - 1 ? WEBS_MAX_PAD : _n % WEBS_MAX_PAD;
     uint8_t _op = i != 0 ? 0x0 : opcode;
     uint8_t _fin = i != frame_count - 1 ? 0x0 : 0x1;
     __webs_bzero(&buf, sizeof(buf));
-    memcpy(buf, &_data[i * (WEBS_MAX_PACKET - 4)], size);
+    memcpy(buf, &_data[i * WEBS_MAX_PAD], size);
     buf[size] = '\0';
     _len = __webs_make_frame(buf, soc_buffer.data, size, _op, _fin);
     if (__webs_asserted_write(_self->fd, soc_buffer.data, _len) < 0) {
@@ -1284,11 +1287,13 @@ webs_server* webs_create(int _port, void * data) {
     break;
   }
 
-  freeaddrinfo(results);
-
   /* Check if binded with success. */
-  if (try == NULL)
+  if (try == NULL) {
+    freeaddrinfo(results);
     WEBS_XERR("couldn't find a port to bind to", errno);
+  }
+
+  freeaddrinfo(results);
 
   error = listen(soc, WEBS_MAX_BACKLOG);
   if (error < 0) return NULL;
