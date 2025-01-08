@@ -12,11 +12,16 @@ void myFuncZ(webs_client* self) {
 }
 
 void myFunc1(webs_client* self, int opcode, const char* data, ssize_t len) {
+  char buf[1024] = {0};
   printf("opcode: %d\n", opcode);
   if (len < 16384)
     printf("server %ld: (id %ld) data [ %s ] (%lu bytes)\n", self->srv->id, self->id, data, len);
   else
     printf("server %ld: (id %ld) data {TOO MUCH, I WONT RUIN YOUR NICE TERMINAL BUT REST ASSURED WE HAVE DATA} (%lu bytes)\n", self->srv->id, self->id, len);
+
+  if (snprintf(buf, sizeof(buf) - 1, "server %ld: (id %ld) data [ %s ] (%lu bytes)\n", self->srv->id, self->id, data, len) > 0) {
+    webs_send(self, buf, WS_FR_OP_TXT);
+  }
 
   if (data[0] == 'E') webs_eject(self);
   if (data[0] == 'C') webs_close(self->srv);

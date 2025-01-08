@@ -2,6 +2,10 @@
 #include <math.h>
 #include <netdb.h>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 #define WEBS_MAX_PAD (WEBS_MAX_PACKET - 11)
 
 #define WS_STATE_CONNECTING 0
@@ -20,35 +24,43 @@
     #define WEBS_XERR(MESG, ERR) { \
       printf( \
         "Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", func: %s [line " \
-        __WEBS_XE_PASTE(__LINE__)"]) : "MESG"\n", __func__); exit(ERR); \
-      }
+        __WEBS_XE_PASTE(__LINE__)"]) : "MESG"\n", __func__ \
+      ); \
+      exit(ERR); \
+    }
   #else
     #define WEBS_XERR(MESG, ERR) { \
       printf( \
         "\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__) \
         ", func: \x1b[1m%s\x1b[0m [line \x1b[1m"__WEBS_XE_PASTE(__LINE__) \
-        "\x1b[0m]) : "MESG"\n", __func__); exit(ERR); \
-      }
+        "\x1b[0m]) : "MESG"\n", __func__ \
+      ); \
+      exit(ERR); \
+    }
   #endif
 #else
   #ifdef NOESCAPE
     #define WEBS_XERR(MESG, ERR) { \
       printf( \
         "Runtime Error: (in "__WEBS_XE_PASTE(__FILE__)", line " \
-        __WEBS_XE_PASTE(__LINE__)") : "MESG"\n"); exit(ERR); \
-      }
+        __WEBS_XE_PASTE(__LINE__)") : "MESG"\n" \
+      ); \
+      exit(ERR); \
+    }
   #else
     #define WEBS_XERR(MESG, ERR) { \
       printf( \
         "\x1b[31m\x1b[1mRuntime Error: \x1b[0m(in "__WEBS_XE_PASTE(__FILE__) \
         ", line \x1b[1m"__WEBS_XE_PASTE(__LINE__) \
-        "\x1b[0m) : "MESG"\n"); exit(ERR); \
-      }
+        "\x1b[0m) : "MESG"\n" \
+      ); \
+      exit(ERR); \
+    }
   #endif
 #endif
 #ifdef VALIDATE_UTF8
-#define IS_CONT(b) (((unsigned char)(b) & 0xC0) == 0x80)
-#define WS_CLSE_INVUTF8 1007
+  #define IS_CONT(b) (((unsigned char)(b) & 0xC0) == 0x80)
+  #define WS_CLSE_INVUTF8 1007
 #endif
 /* 
  * declare endian-independant macros
@@ -768,22 +780,49 @@ static void __webs_add_client(webs_server* _srv, webs_client * node) {
  * @param _cli: the client that is to be connected.
  * @return -1 on error, or 0 otherwise.
  */
-static int __webs_accept_connection(int _soc, webs_client* _c) {
+static int __webs_accept_connection(int _soc, webs_client** _c) {
   /* static id counter variable */
   static size_t client_id_counter = 0;
 
-  socklen_t addr_size = sizeof(_c->addr);
+  struct sockaddr_storage sa;
+  socklen_t salen;
+  webs_client *c = NULL;
 
-  _c->fd = accept(_soc, (struct sockaddr*) &_c->addr, &addr_size);
-  if (_c->fd < 0) {
+  int fd = accept(_soc, (struct sockaddr *)&sa, &salen);
+  if (fd < 0) {
     WEBS_XERR("Error on accepting connections..", errno);
     return -1;
   }
 
-  _c->id = client_id_counter;
+  c = __webs_malloc(sizeof(webs_client));
+  if (!c) {
+    __webs_close_socket(fd);
+    WEBS_XERR("Failed to allocate memory!", ENOMEM);
+    return -1;
+  }
+
+  if (pthread_mutex_init(&c->mtx_sta, NULL)) {
+    __webs_close_socket(fd);
+    WEBS_XERR("Failed to allocate state mutex!", ENOMEM);
+    return -1;
+  }
+
+  if (pthread_mutex_init(&c->mtx_snd, NULL)) {
+    __webs_close_socket(fd);
+    WEBS_XERR("Failed to allocate send mutex!", ENOMEM);
+    return -1;
+  }
+  c->fd = fd;
+  c->id = client_id_counter;
+
+  __webs_bzero(&c->buf, sizeof(c->buf));
+
+  c->next = c->prev = NULL;
+
   client_id_counter++;
 
-  return _c->fd;
+  *_c = c;
+  return fd;
 }
 
 /* 
@@ -1060,34 +1099,21 @@ static void * __webs_periodic(void * _srv) {
  */
 static void* __webs_main(void* _srv) {
   webs_server* srv = (webs_server*) _srv;
-  webs_client* user_ptr;
+  webs_client* user_ptr = NULL;
 
   if (*srv->events.on_periodic && srv->interval > 0)
     pthread_create(&srv->periodic, 0, __webs_periodic, srv);
 
   for (;;) {
-    user_ptr = __webs_malloc(sizeof(webs_client));
-    if (!user_ptr)
-      WEBS_XERR("Failed to allocate memory!", ENOMEM);
+    if (__webs_accept_connection(srv->soc, &user_ptr) < 0)
+      break;
 
-    if (pthread_mutex_init(&user_ptr->mtx_sta, NULL))
-      WEBS_XERR("Failed to allocate state mutex!", ENOMEM);
-
-    if (pthread_mutex_init(&user_ptr->mtx_snd, NULL))
-      WEBS_XERR("Failed to allocate send mutex!", ENOMEM);
-
-    user_ptr->fd = __webs_accept_connection(srv->soc, user_ptr);
     user_ptr->srv = srv;
-    __webs_bzero(&user_ptr->buf, sizeof(user_ptr->buf));
 
-    user_ptr->next = user_ptr->prev = NULL;
-
-    if (user_ptr->fd >= 0) {
-      __webs_add_client(srv, user_ptr);
-      __webs_set_client_state(user_ptr, WS_STATE_CONNECTING);
-      if (pthread_create(&user_ptr->thread, 0, __webs_client_main, user_ptr))
-        WEBS_XERR("Could not create the client thread!", ENOMEM);
-    }
+    __webs_add_client(srv, user_ptr);
+    __webs_set_client_state(user_ptr, WS_STATE_CONNECTING);
+    if (pthread_create(&user_ptr->thread, 0, __webs_client_main, user_ptr))
+      WEBS_XERR("Could not create the client thread!", ENOMEM);
   }
 
   return NULL;

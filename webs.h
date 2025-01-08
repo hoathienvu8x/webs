@@ -14,10 +14,6 @@
 #include <unistd.h>
 #include <errno.h>
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-
 #define WEBS_MAX_PACKET 1024
 
 #define WS_FR_OP_CONT 0
@@ -75,7 +71,6 @@ struct webs_socket {
 struct webs_client {
   struct webs_server* srv; /* a pointer to the server the the
                             *   clinet is connected to */
-  struct sockaddr_in addr; /* client address */
   pthread_t thread;        /* client's posix thread id */
   size_t id;               /* client's internal id */
   int fd;                  /* client's descriptor */
