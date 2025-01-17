@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/select.h>
 
 #define WEBS_MAX_PACKET 1024
 
@@ -65,6 +66,8 @@ struct webs_socket {
   ssize_t pos;
 };
 
+struct map_t;
+
 /* 
  * holds information relevant to a client.
  */
@@ -75,8 +78,6 @@ struct webs_client {
   size_t id;               /* client's internal id */
   int fd;                  /* client's descriptor */
   struct webs_socket buf;
-  struct webs_client * next;
-  struct webs_client * prev;
   int state;
   pthread_mutex_t mtx_snd;
   pthread_mutex_t mtx_sta;
@@ -87,8 +88,7 @@ struct webs_client {
  */
 struct webs_server {
   struct webs_event_list events;
-  struct webs_client* head;
-  struct webs_client* tail;
+  struct map_t * client_maps;
   size_t num_clients;
   pthread_t thread;
   size_t id;
@@ -97,6 +97,8 @@ struct webs_server {
   pthread_t periodic;
   pthread_mutex_t mtx;
   int interval;
+  fd_set fds;
+  size_t fdmax;
 };
 
 /**

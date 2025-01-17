@@ -163,6 +163,12 @@ uint8_t WEBSFR_RESVRD_MASK[2] = {0x70, 0x00};
 #define __webs_realloc(dst,sz) realloc(dst, sz)
 #define __webs_bzero(dst,sz) memset(dst, 0, sz)
 
+struct map_t {
+  webs_client **clients;
+  size_t capacity;
+  size_t length;
+};
+
 /* 
  * stores header data from a websocket frame.
  */
@@ -727,12 +733,6 @@ static int __webs_set_client_state(webs_client* _self, int state) {
 static void __webs_remove_client(webs_client* _node) {
   if (_node == NULL) return;
 
-  if (_node->prev)
-    _node->prev->next = _node->next;
-
-  if (_node->next)
-    _node->next->prev = _node->prev;
-
   _node->srv->num_clients--;
 
   pthread_mutex_destroy(&_node->mtx_sta);
@@ -741,6 +741,118 @@ static void __webs_remove_client(webs_client* _node) {
   __webs_dispose(_node);
 
   return;
+}
+
+static struct map_t *__webs_map_create() {
+  struct map_t *m = __webs_malloc(sizeof(struct map_t));
+  if (!m) return NULL;
+  __webs_bzero(m, sizeof(struct map_t));
+  m->length = 0;
+  m->capacity = 16;
+  m->clients = __webs_malloc(m->capacity * sizeof(webs_client *));
+  if (!m->clients) {
+    __webs_dispose(m);
+    return NULL;
+  }
+  __webs_bzero(m->clients, m->capacity * sizeof(webs_client *));
+  return m;
+}
+
+static void __webs_map_dispose(struct map_t *m) {
+  size_t i;
+  if (!m) return;
+  for (i = 0; i < m->capacity; i++) {
+    if (m->clients[i]) __webs_remove_client(m->clients[i]);
+  }
+  __webs_dispose(m->clients);
+  __webs_dispose(m);
+}
+
+#define FNV_OFFSET 14695981039346656037UL
+#define FNV_PRIME 1099511628211UL
+
+static uint64_t __webs_map_hash(int fd) {
+  uint64_t hash = FNV_OFFSET;
+  unsigned char *p = (unsigned char *)&fd;
+  size_t len = sizeof(fd);
+  while (len--) {
+    hash ^= (uint64_t)(*p++);
+    hash *= FNV_PRIME;
+  }
+  return hash;
+}
+
+static webs_client *__webs_map_get(struct map_t *m, int fd) {
+  uint64_t h;
+  size_t index, i;
+  if (!m || fd <= 0 || m->length == 0 || !m->clients) return NULL;
+  h = __webs_map_hash(fd);
+  i = index = (size_t)(h & (uint64_t)(m->capacity - 1));
+  while (m->clients[i] != NULL) {
+    if(m->clients[i]->fd == fd) {
+      webs_client *cli = m->clients[i];
+      return cli;
+    }
+    i++;
+    if (i >= m->capacity) i = 0;
+    if (i == index) break;
+  }
+  return NULL;
+}
+
+static int __webs_map_set_client(
+  webs_client **clients, size_t capacity, int fd,
+  webs_client *cli, size_t *plength
+) {
+  uint64_t h = __webs_map_hash(fd);
+  size_t index = (size_t)(h & (uint64_t)(capacity - 1));
+  size_t i = index;
+  while (clients[i] != NULL) {
+    if (clients[i]->fd == fd) {
+      clients[i] = cli;
+      return 0;
+    }
+    i++;
+    if (i >= capacity) i = 0;
+    if (i == index) return -1;
+  }
+  
+  clients[index] = cli;
+  (*plength)++;
+  return 0;
+}
+
+static int __webs_map_expand(struct map_t *m) {
+  size_t new_capacity = m->capacity * 2;
+  size_t i;
+  webs_client **clients = NULL;
+  if (new_capacity < m->capacity) return -1;
+  clients = __webs_malloc(new_capacity * sizeof(webs_client *));
+  if (!clients) return -1;
+  __webs_bzero(clients, new_capacity * sizeof(webs_client *));
+  for (i = 0; i < m->capacity; i++) {
+    if (m->clients[i] != NULL) {
+      __webs_map_set_client(
+        clients, new_capacity, m->clients[i]->fd, m->clients[i], NULL
+      );
+    }
+  }
+  __webs_dispose(m->clients);
+  m->clients = clients;
+  m->capacity = new_capacity;
+  return 0;
+}
+
+static int __webs_map_set(struct map_t *m, int fd, webs_client *cli) {
+  int rc;
+  if (!m || fd <= 0 || !cli) return -1;
+  if (m->length >= m->capacity / 2) {
+    if (__webs_map_expand(m)) {
+      return -1;
+    }
+  }
+  rc = __webs_map_set_client(m->clients, m->capacity, fd, cli, &m->length);
+  return rc;
 }
 
 /* 
@@ -753,22 +865,9 @@ static void __webs_remove_client(webs_client* _node) {
 static void __webs_add_client(webs_server* _srv, webs_client * node) {
   if (_srv == NULL) return;
 
-  /* if this is first client, set head = tail = new element */
-  if (_srv->tail == NULL) {
-    _srv->tail = _srv->head = node;
-
-    _srv->head->prev = NULL;
-  }
-
-  /* otherwise, just add after the current tail */
-  else {
-    _srv->tail->next = node;
-
-    _srv->tail->next->prev = _srv->tail;
-    _srv->tail = _srv->tail->next;
-  }
-
-  _srv->tail->next = NULL;
+  pthread_mutex_lock(&_srv->mtx);
+  __webs_map_set(_srv->client_maps, node->fd, node);
+  pthread_mutex_unlock(&_srv->mtx);
 
   _srv->num_clients++;
 }
@@ -817,8 +916,6 @@ static int __webs_accept_connection(int _soc, webs_client** _c) {
 
   __webs_bzero(&c->buf, sizeof(c->buf));
 
-  c->next = c->prev = NULL;
-
   client_id_counter++;
 
   *_c = c;
@@ -856,56 +953,58 @@ static void* __webs_client_main(void* _self) {
   __webs_bzero(&ws_info, sizeof(ws_info));
   __webs_bzero(&frm, sizeof(frm));
 
-  /* wait for HTTP websocket request header */
-  do {
-    _n = __webs_asserted_read(self, soc_buffer.data + soc_buffer.len, 1);
-    if (_n < 0) goto ABORT;
-    soc_buffer.len += _n;
-    if (strstr(soc_buffer.data, "\r\n\r\n")) {
-      soc_buffer.len -= 4;
-      break;
-    }
-    if (soc_buffer.len >= WEBS_MAX_PACKET) break;
-  } while (_n > 0);
+  if (__webs_get_client_state(self) == WS_STATE_CONNECTING) {
 
-  /* if we did not recieve one, abort */
-  if (soc_buffer.len == 0 || strstr(soc_buffer.data, "\r\n\r\n") == NULL)
-    goto ABORT;
+    /* wait for HTTP websocket request header */
+    do {
+      _n = __webs_asserted_read(self, soc_buffer.data + soc_buffer.len, 1);
+      if (_n < 0) goto ABORT;
+      soc_buffer.len += _n;
+      if (strstr(soc_buffer.data, "\r\n\r\n")) {
+        soc_buffer.len -= 4;
+        break;
+      }
+      if (soc_buffer.len >= WEBS_MAX_PACKET) break;
+    } while (_n > 0);
 
-  /* process handshake */
-  soc_buffer.data[soc_buffer.len] = '\0';
-
-  /* if we failed, abort */
-  if (__webs_process_handshake(soc_buffer.data, &ws_info) < 0)
-    goto ABORT;
-
-  if (*self->srv->events.is_route) {
-    char path[256] = {0};
-    size_t p = strcspn(ws_info.path, "?# ");
-    if (p != strlen(ws_info.path)) {
-      memcpy(path, ws_info.path, p);
-      path[p] = '\0';
-    } else {
-      memcpy(path, ws_info.path, strlen(ws_info.path));
-    }
-    if (!(*self->srv->events.is_route)(self, path)) {
+    /* if we did not recieve one, abort */
+    if (soc_buffer.len == 0 || strstr(soc_buffer.data, "\r\n\r\n") == NULL)
       goto ABORT;
+
+    /* process handshake */
+    soc_buffer.data[soc_buffer.len] = '\0';
+
+    /* if we failed, abort */
+    if (__webs_process_handshake(soc_buffer.data, &ws_info) < 0)
+      goto ABORT;
+
+    if (*self->srv->events.is_route) {
+      char path[256] = {0};
+      size_t p = strcspn(ws_info.path, "?# ");
+      if (p != strlen(ws_info.path)) {
+        memcpy(path, ws_info.path, p);
+        path[p] = '\0';
+      } else {
+        memcpy(path, ws_info.path, strlen(ws_info.path));
+      }
+      if (!(*self->srv->events.is_route)(self, path)) {
+        goto ABORT;
+      }
     }
+
+    /* if we succeeded, generate + tansmit response */
+    soc_buffer.len = __webs_generate_handshake(soc_buffer.data,
+      ws_info.webs_key);
+
+    if (__webs_asserted_write(self->fd, soc_buffer.data, soc_buffer.len) < 0)
+      goto ABORT;
+
+    __webs_set_client_state(self, WS_STATE_OPEN);
+
+    /* call client on_open function */
+    if (*self->srv->events.on_open)
+      (*self->srv->events.on_open)(self);
   }
-
-  /* if we succeeded, generate + tansmit response */
-  soc_buffer.len = __webs_generate_handshake(soc_buffer.data,
-    ws_info.webs_key);
-
-  if (__webs_asserted_write(self->fd, soc_buffer.data, soc_buffer.len) < 0)
-    goto ABORT;
-
-  __webs_set_client_state(self, WS_STATE_OPEN);
-
-  /* call client on_open function */
-  if (*self->srv->events.on_open)
-    (*self->srv->events.on_open)(self);
-
   /* main loop */
   for (;;) {
     if (__webs_parse_frame(self, &frm) < 0) {
@@ -924,7 +1023,7 @@ static void* __webs_client_main(void* _self) {
         (*self->srv->events.on_error)(self, WEBS_ERR_NO_SUPPORT);
 
       __webs_flush(self, frm.off + frm.length - 2);
-      continue;
+      return NULL;
     }
 
     /* check if packet is too big */
@@ -933,7 +1032,7 @@ static void* __webs_client_main(void* _self) {
         (*self->srv->events.on_error)(self, WEBS_ERR_OVERFLOW);
 
       __webs_flush(self, frm.off + frm.length - 2);
-      continue;
+      return NULL;
     }
 
     /* respond to ping */
@@ -946,7 +1045,7 @@ static void* __webs_client_main(void* _self) {
       else
         webs_pong(self);
 
-      continue;
+      return NULL;
     }
 
     /* handle pong */
@@ -956,7 +1055,7 @@ static void* __webs_client_main(void* _self) {
       if (*self->srv->events.on_pong)
         (*self->srv->events.on_pong)(self);
 
-      continue;
+      return NULL;
     }
 
     /* deal with normal frames (non-fragmented) */
@@ -979,7 +1078,7 @@ static void* __webs_client_main(void* _self) {
 
       if (!WEBSFR_GET_FINISH(frm.info)) {
         cont = 1;
-        continue;
+        return NULL;
       }
     }
 
@@ -1009,7 +1108,7 @@ static void* __webs_client_main(void* _self) {
       total += frm.length;
 
       if (!WEBSFR_GET_FINISH(frm.info))
-        continue;
+        return NULL;
 
       cont = 0;
     }
@@ -1021,7 +1120,7 @@ static void* __webs_client_main(void* _self) {
         (*self->srv->events.on_error)(self, WEBS_ERR_UNEXPECTED_CONTINUTATION);
 
       __webs_flush(self, frm.off + frm.length - 2);
-      continue;
+      return NULL;
     }
 
     /* respond to close */
@@ -1059,7 +1158,7 @@ static void* __webs_client_main(void* _self) {
     __webs_dispose(data);
 
     data = 0;
-    continue;
+    return NULL;
   }
 
   /* call client on_error if there was an error */
@@ -1077,6 +1176,7 @@ static void* __webs_client_main(void* _self) {
 
   ABORT:
 
+  FD_CLR(self->fd, &self->srv->fds);
   __webs_close_socket(self->fd);
   __webs_remove_client(self);
 
@@ -1101,19 +1201,50 @@ static void* __webs_main(void* _srv) {
   webs_server* srv = (webs_server*) _srv;
   webs_client* user_ptr = NULL;
 
+  fd_set read_fds;
+  struct timeval timeout;
+  int activity, i;
+
+  FD_ZERO(&srv->fds);
+  FD_SET(srv->soc, &srv->fds);
+  FD_ZERO(&read_fds);
+
+  srv->fdmax = srv->soc;
+
   if (*srv->events.on_periodic && srv->interval > 0)
     pthread_create(&srv->periodic, 0, __webs_periodic, srv);
 
   for (;;) {
-    if (__webs_accept_connection(srv->soc, &user_ptr) < 0)
-      break;
+    read_fds = srv->fds;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 10000;
 
-    user_ptr->srv = srv;
+    activity = select(srv->fdmax + 1, &read_fds, NULL, NULL, &timeout);
+    if (activity < 0) break;
 
-    __webs_add_client(srv, user_ptr);
-    __webs_set_client_state(user_ptr, WS_STATE_CONNECTING);
-    if (pthread_create(&user_ptr->thread, 0, __webs_client_main, user_ptr))
-      WEBS_XERR("Could not create the client thread!", ENOMEM);
+    for (i = 0; i <= (int)srv->fdmax; i++) {
+      if (!FD_ISSET(i, &read_fds)) continue;
+      if (i == srv->soc) {
+        if (__webs_accept_connection(srv->soc, &user_ptr) < 0)
+          return NULL;
+
+        FD_SET(user_ptr->fd, &srv->fds);
+
+        if (user_ptr->fd > (int)srv->fdmax)
+          srv->fdmax = user_ptr->fd;
+
+        user_ptr->srv = srv;
+        __webs_add_client(srv, user_ptr);
+        __webs_set_client_state(user_ptr, WS_STATE_CONNECTING);
+      } else {
+        pthread_mutex_lock(&srv->mtx);
+        user_ptr = __webs_map_get(srv->client_maps, i);
+        pthread_mutex_unlock(&srv->mtx);
+        if (!user_ptr) continue;
+        if (pthread_create(&user_ptr->thread, 0, __webs_client_main, user_ptr))
+          WEBS_XERR("Could not create the client thread!", ENOMEM);
+      }
+    }
   }
 
   return NULL;
@@ -1132,8 +1263,7 @@ void webs_eject(webs_client* _self) {
 }
 
 void webs_close(webs_server* _srv) {
-  webs_client* node = _srv->head;
-  webs_client* temp;
+  size_t i;
 
   if (_srv->periodic)
     pthread_cancel(_srv->periodic);
@@ -1145,11 +1275,16 @@ void webs_close(webs_server* _srv) {
 
   pthread_mutex_destroy(&_srv->mtx);
 
-  while (node) {
-    temp = node->next;
-    webs_eject(node);
-    node = temp;
+  for (i = 0; i < _srv->client_maps->capacity; i++) {
+    if (_srv->client_maps->clients[i] != NULL) {
+      webs_eject(_srv->client_maps->clients[i]);
+    }
   }
+
+  __webs_map_dispose(_srv->client_maps);
+
+  FD_ZERO(&_srv->fds);
+  _srv->fdmax = 0;
 
   __webs_dispose(_srv);
 }
@@ -1160,14 +1295,14 @@ int webs_send(webs_client* _self, const char* _data, int opcode) {
   return webs_sendn(_self, _data, strlen(_data), opcode);
 }
 int webs_broadcast(webs_client* _self, const char* _data, int opcode) {
-  webs_client* node;
+  size_t i;
   if (!_self || !_self->srv) return -1;
   pthread_mutex_lock(&_self->srv->mtx);
-  node = _self->srv->head;
-  while (node) {
+  for (i = 0; i < _self->srv->client_maps->capacity; i++) {
+    webs_client *node = _self->srv->client_maps->clients[i];
+    if (!node) continue;
     if (node->id == _self->id) continue;
     (void)webs_send(node, _data, opcode);
-    node = node->next;
   }
   pthread_mutex_unlock(&_self->srv->mtx);
   return 0;
@@ -1216,38 +1351,38 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   return 0;
 }
 int webs_nbroadcast(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
-  webs_client* node;
+  size_t i;
   if (!_self || !_self->srv) return -1;
   pthread_mutex_lock(&_self->srv->mtx);
-  node = _self->srv->head;
-  while (node) {
+  for (i = 0; i < _self->srv->client_maps->capacity; i++) {
+    webs_client* node = _self->srv->client_maps->clients[i];
+    if (!node) continue;
     if (node->id == _self->id) continue;
     (void)webs_sendn(node, _data, _n, opcode);
-    node = node->next;
   }
   pthread_mutex_unlock(&_self->srv->mtx);
   return 0;
 }
 int webs_sendall(webs_server* _srv, const char* _data, int opcode) {
-  webs_client* node;
+  size_t i;
   if (!_srv) return -1;
   pthread_mutex_lock(&_srv->mtx);
-  node = _srv->head;
-  while (node) {
+  for (i = 0; i < _srv->client_maps->capacity; i++) {
+    webs_client* node = _srv->client_maps->clients[i];
+    if (!node) continue;
     (void)webs_send(node, _data, opcode);
-    node = node->next;
   }
   pthread_mutex_unlock(&_srv->mtx);
   return 0;
 }
 int webs_nsendall(webs_server* _srv, const char* _data, ssize_t _n, int opcode) {
-  webs_client* node;
+  size_t i;
   if (!_srv) return -1;
   pthread_mutex_lock(&_srv->mtx);
-  node = _srv->head;
-  while (node) {
+  for (i = 0; i < _srv->client_maps->capacity; i++) {
+    webs_client* node = _srv->client_maps->clients[i];
+    if (!node) continue;
     (void)webs_sendn(node, _data, _n, opcode);
-    node = node->next;
   }
   pthread_mutex_unlock(&_srv->mtx);
   return 0;
@@ -1331,7 +1466,13 @@ webs_server* webs_create(int _port, void * data) {
   server->data = data;
   server->interval = 1000000;
 
-  server->head = server->tail = NULL;
+  server->client_maps = __webs_map_create();
+  if (!server->client_maps) {
+    __webs_close_socket(server->soc);
+    pthread_mutex_destroy(&server->mtx);
+    __webs_dispose(server);
+    return NULL;
+  }
 
   /* initialise default handlers */
   server->events.on_error = NULL;
