@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 
 #define WEBS_MAX_PACKET 1024
 
@@ -80,6 +81,7 @@ struct webs_client {
   int state;
   pthread_mutex_t mtx_snd;
   pthread_mutex_t mtx_sta;
+  time_t last_recv;
 };
 
 /* 

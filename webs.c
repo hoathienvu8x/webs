@@ -62,6 +62,7 @@
   #define IS_CONT(b) (((unsigned char)(b) & 0xC0) == 0x80)
   #define WS_CLSE_INVUTF8 1007
 #endif
+#define WS_CLSE_TIMEOUT 3000
 /* 
  * declare endian-independant macros
  * http://www.yolinux.com/TUTORIALS/Endian-Byte-Order.html
@@ -151,6 +152,10 @@ uint8_t WEBSFR_MASKED_MASK[2] = {0x00, 0x80};
 uint8_t WEBSFR_FINISH_MASK[2] = {0x80, 0x00};
 uint8_t WEBSFR_RESVRD_MASK[2] = {0x70, 0x00};
 
+
+#ifndef WS_RECV_TIMEOUT
+  #define WS_RECV_TIMEOUT 30
+#endif
 
 #define __webs_dispose(p) do { \
   if((p)) {                    \
@@ -908,6 +913,8 @@ static void* __webs_client_main(void* _self) {
 
   /* main loop */
   for (;;) {
+    self->last_recv = time(NULL);
+    if (__webs_get_client_state(self) != WS_STATE_OPEN) break;
     if (__webs_parse_frame(self, &frm) < 0) {
       error = WEBS_ERR_READ_FAILED;
       break;
@@ -1085,9 +1092,37 @@ static void* __webs_client_main(void* _self) {
 
 static void * __webs_periodic(void * _srv) {
   webs_server * srv = (webs_server*) _srv;
+  time_t now, lt;
+  long ts = srv->interval && srv->interval < WS_RECV_TIMEOUT * 1000 ? (long)srv->interval : WS_RECV_TIMEOUT * 1000;
+  uint8_t ctrl[3] = {
+    (WS_CLSE_TIMEOUT >> 8), (WS_CLSE_TIMEOUT & 0xff), '\0'
+  };
+  webs_client* node = NULL;
+  if (ts == 0) return NULL;
+  lt = 0;
   for (;;) {
-    nsleep((long)srv->interval);
-    (*srv->events.on_periodic)(srv);
+    nsleep(ts);
+    now = time(NULL);
+    if (difftime(now, lt) >= WS_RECV_TIMEOUT) {
+      pthread_mutex_lock(&srv->mtx);
+      node = srv->head;
+      while (node) {
+        if (difftime(now, node->last_recv) >= WS_RECV_TIMEOUT) {
+          webs_send_close(node, (const char *)ctrl);
+          __webs_set_client_state(node, WS_STATE_CLOSING);
+          /* __webs_close_socket(node->fd);
+           __webs_remove_client(node); */
+        }
+        node = node->next;
+      }
+      pthread_mutex_unlock(&srv->mtx);
+    }
+    if (*srv->events.on_periodic) {
+      if (srv->interval > 0 && difftime(now, lt) >= (srv->interval / 1000)) {
+        (*srv->events.on_periodic)(srv);
+      }
+    }
+    lt = now;
   }
   return NULL;
 }
@@ -1101,8 +1136,7 @@ static void* __webs_main(void* _srv) {
   webs_server* srv = (webs_server*) _srv;
   webs_client* user_ptr = NULL;
 
-  if (*srv->events.on_periodic && srv->interval > 0)
-    pthread_create(&srv->periodic, 0, __webs_periodic, srv);
+  pthread_create(&srv->periodic, 0, __webs_periodic, srv);
 
   for (;;) {
     if (__webs_accept_connection(srv->soc, &user_ptr) < 0)
@@ -1221,8 +1255,9 @@ int webs_nbroadcast(webs_client* _self, const char* _data, ssize_t _n, int opcod
   pthread_mutex_lock(&_self->srv->mtx);
   node = _self->srv->head;
   while (node) {
-    if (node->id == _self->id) continue;
-    (void)webs_sendn(node, _data, _n, opcode);
+    if (node->id != _self->id) {
+      (void)webs_sendn(node, _data, _n, opcode);
+    }
     node = node->next;
   }
   pthread_mutex_unlock(&_self->srv->mtx);
@@ -1329,7 +1364,7 @@ webs_server* webs_create(int _port, void * data) {
 
   server->soc = soc;
   server->data = data;
-  server->interval = 1000000;
+  server->interval = (WS_RECV_TIMEOUT * 1000);
 
   server->head = server->tail = NULL;
 
