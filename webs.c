@@ -196,6 +196,17 @@ static int __webs_strcat(char* _buf, char* _a, char* _b) {
   return len;
 }
 
+static int __webs_strcasecmp(const char *s1, const char *s2) {
+  register unsigned char c1, c2;
+  register unsigned char flipbit = ~(1 << 5);
+  do {
+    c1 = (unsigned char)*s1++ & flipbit;
+    c2 = (unsigned char)*s2++ & flipbit;
+    if (c1 == '\0') return c1 - c2;
+  } while (c1 == c2);
+  return c1 - c2;
+}
+
 /* 
  * takes the SHA-1 hash of `_n` bytes of data (pointed to by `_s`),
  * storing the 160-bit (20-byte) result in the buffer pointed to by `_d`.
@@ -646,7 +657,7 @@ static int __webs_process_handshake(char* _src, struct webs_info* _rtn) {
 
   _src += nbytes;
 
-  if (strcasecmp(_rtn->req_type, "GET"))
+  if (__webs_strcasecmp(_rtn->req_type, "GET"))
     return -1;
 
   _rtn->http_vrs <<= 8;
@@ -655,14 +666,14 @@ static int __webs_process_handshake(char* _src, struct webs_info* _rtn) {
   while (sscanf(_src, "%s%n", param_str, &nbytes) > 0) {
     _src += nbytes;
 
-    if (!strcasecmp(param_str, "Sec-WebSocket-Version:")) {
+    if (!__webs_strcasecmp(param_str, "Sec-WebSocket-Version:")) {
       if (sscanf(_src, "%hu%*[^\r]\r%n", &_rtn->webs_vrs, &nbytes) <= 0)
         return -1;
       _src += nbytes;
     }
 
     else
-    if (!strcasecmp(param_str, "Sec-WebSocket-Key:")) {
+    if (!__webs_strcasecmp(param_str, "Sec-WebSocket-Key:")) {
       if (sscanf(_src, "%s%*[^\r]\r%n", _rtn->webs_key, &nbytes) <= 0)
         return -1;
       _src += nbytes;
