@@ -453,7 +453,10 @@ static ssize_t __webs_asserted_read(webs_client* cli, void* _dst, size_t _n) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
       __webs_bzero(&cli->buf, sizeof(cli->buf));
       n = recv(cli->fd, cli->buf.data, sizeof(cli->buf.data), 0);
-      if (n <= 0) return n;
+      if (n <= 0) {
+        cli->buf.pos -= i;
+        return n;
+      }
       cli->buf.pos = 0;
       cli->buf.len = (size_t)n;
     }
@@ -501,7 +504,10 @@ static ssize_t __webs_flush(webs_client* cli, size_t _n) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
       __webs_bzero(&cli->buf, sizeof(cli->buf));
       n = recv(cli->fd, cli->buf.data, sizeof(cli->buf.data), 0);
-      if (n <= 0) return n;
+      if (n <= 0) {
+        cli->buf.pos -= i;
+        return n;
+      }
       cli->buf.pos = 0;
       cli->buf.len = (size_t)n;
     }
