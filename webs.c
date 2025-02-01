@@ -1182,8 +1182,9 @@ int webs_broadcast(webs_client* _self, const char* _data, int opcode) {
   pthread_mutex_lock(&_self->srv->mtx);
   node = _self->srv->head;
   while (node) {
-    if (node->id == _self->id) continue;
-    (void)webs_send(node, _data, opcode);
+    if (node->id != _self->id) {
+      (void)webs_send(node, _data, opcode);
+    }
     node = node->next;
   }
   pthread_mutex_unlock(&_self->srv->mtx);
@@ -1238,8 +1239,9 @@ int webs_nbroadcast(webs_client* _self, const char* _data, ssize_t _n, int opcod
   pthread_mutex_lock(&_self->srv->mtx);
   node = _self->srv->head;
   while (node) {
-    if (node->id == _self->id) continue;
-    (void)webs_sendn(node, _data, _n, opcode);
+    if (node->id != _self->id) {
+      (void)webs_sendn(node, _data, _n, opcode);
+    }
     node = node->next;
   }
   pthread_mutex_unlock(&_self->srv->mtx);
