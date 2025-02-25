@@ -152,12 +152,12 @@ uint8_t WEBSFR_FINISH_MASK[2] = {0x80, 0x00};
 uint8_t WEBSFR_RESVRD_MASK[2] = {0x70, 0x00};
 
 
-#define __webs_dispose(p) do { \
-  if((p)) {                    \
-    free((p));                 \
-    (p) = NULL;                \
-  }                            \
-} while (0)
+#define __webs_dispose(p) { \
+  if((p)) {                 \
+    free((p));              \
+    (p) = NULL;             \
+  }                         \
+}
 
 #define __webs_malloc(sz) malloc(sz)
 #define __webs_realloc(dst,sz) realloc(dst, sz)
@@ -464,10 +464,7 @@ static ssize_t __webs_asserted_read(webs_client* cli, void* _dst, size_t _n) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
       __webs_bzero(&cli->buf, sizeof(cli->buf));
       n = recv(cli->fd, cli->buf.data, sizeof(cli->buf.data), 0);
-      if (n <= 0) {
-        cli->buf.pos -= i;
-        return n;
-      }
+      if (n <= 0) return n;
       cli->buf.pos = 0;
       cli->buf.len = (size_t)n;
     }
@@ -515,10 +512,7 @@ static ssize_t __webs_flush(webs_client* cli, size_t _n) {
     if (cli->buf.pos == 0|| cli->buf.pos == cli->buf.len) {
       __webs_bzero(&cli->buf, sizeof(cli->buf));
       n = recv(cli->fd, cli->buf.data, sizeof(cli->buf.data), 0);
-      if (n <= 0) {
-        cli->buf.pos -= i;
-        return n;
-      }
+      if (n <= 0) return n;
       cli->buf.pos = 0;
       cli->buf.len = (size_t)n;
     }
@@ -818,6 +812,8 @@ static int __webs_accept_connection(int _soc, webs_client** _c) {
     return -1;
   }
 
+  __webs_bzero(c, sizeof(webs_client));
+
   if (pthread_mutex_init(&c->mtx_sta, NULL)) {
     __webs_close_socket(fd);
     WEBS_XERR("Failed to allocate state mutex!", ENOMEM);
@@ -1095,6 +1091,10 @@ static void* __webs_client_main(void* _self) {
   ABORT:
 
   __webs_close_socket(self->fd);
+
+  pthread_cancel(self->thread);
+  pthread_join(self->thread, 0);
+
   __webs_remove_client(self);
 
   return NULL;
@@ -1133,6 +1133,14 @@ static void* __webs_main(void* _srv) {
       WEBS_XERR("Could not create the client thread!", ENOMEM);
   }
 
+  if (srv->periodic) {
+    pthread_cancel(srv->periodic);
+    pthread_join(srv->periodic, 0);
+  }
+
+  if (srv->thread)
+    pthread_cancel(srv->thread);
+
   return NULL;
 }
 
@@ -1145,6 +1153,8 @@ void webs_eject(webs_client* _self) {
 
   __webs_close_socket(_self->fd);
   pthread_cancel(_self->thread);
+  pthread_join(_self->thread, 0);
+
   __webs_remove_client(_self);
 }
 
@@ -1152,11 +1162,15 @@ void webs_close(webs_server* _srv) {
   webs_client* node = _srv->head;
   webs_client* temp;
 
-  if (_srv->periodic)
+  if (_srv->periodic) {
     pthread_cancel(_srv->periodic);
+    pthread_join(_srv->periodic, 0);
+  }
 
-  if (_srv->thread)
+  if (_srv->thread) {
     pthread_cancel(_srv->thread);
+    pthread_join(_srv->thread, 0);
+  }
 
   __webs_close_socket(_srv->soc);
 
@@ -1273,7 +1287,6 @@ int webs_nsendall(webs_server* _srv, const char* _data, ssize_t _n, int opcode) 
 }
 void webs_pong(webs_client* _self) {
   webs_sendn(_self, (char*) &WEBS_PONG, 2, WS_FR_OP_PONG);
-  return;
 }
 
 int webs_hold(webs_server* _srv) {
@@ -1297,6 +1310,8 @@ webs_server* webs_create(int _port, void * data) {
 
   if (server == NULL)
     WEBS_XERR("Failed to allocate memory!", ENOMEM);
+
+  __webs_bzero(server, sizeof(webs_server));
 
   __webs_bzero(&hints, sizeof(struct addrinfo));
   hints.ai_flags = AI_PASSIVE;
