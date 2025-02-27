@@ -869,6 +869,8 @@ static void* __webs_client_main(void* _self) {
   __webs_bzero(&ws_info, sizeof(ws_info));
   __webs_bzero(&frm, sizeof(frm));
 
+  if (!self) return NULL;
+
   /* wait for HTTP websocket request header */
   do {
     _n = __webs_asserted_read(self, soc_buffer.data + soc_buffer.len, 1);
@@ -1106,6 +1108,7 @@ static void* __webs_client_main(void* _self) {
 
 static void * __webs_periodic(void * _srv) {
   webs_server * srv = (webs_server*) _srv;
+  if (!srv) return NULL;
   for (;;) {
     nsleep((long)srv->interval);
     (*srv->events.on_periodic)(srv);
@@ -1121,6 +1124,8 @@ static void * __webs_periodic(void * _srv) {
 static void* __webs_main(void* _srv) {
   webs_server* srv = (webs_server*) _srv;
   webs_client* user_ptr = NULL;
+
+  if (!srv) return NULL;
 
   if (*srv->events.on_periodic && srv->interval > 0)
     pthread_create(&srv->periodic, 0, __webs_periodic, srv);
@@ -1149,6 +1154,8 @@ static void* __webs_main(void* _srv) {
 }
 
 void webs_eject(webs_client* _self) {
+  if (!_self) return;
+
   __webs_set_client_state(_self, WS_STATE_CLOSING);
   if (*_self->srv->events.on_close)
     (*_self->srv->events.on_close)(_self);
@@ -1163,8 +1170,11 @@ void webs_eject(webs_client* _self) {
 }
 
 void webs_close(webs_server* _srv) {
-  webs_client* node = _srv->head;
+  webs_client* node = NULL;
   webs_client* temp;
+
+  if (!_srv) return;
+  node = _srv->head;
 
   if (_srv->periodic) {
     pthread_cancel(_srv->periodic);
@@ -1387,6 +1397,7 @@ webs_server* webs_create(int _port, void * data) {
 }
 
 void webs_start(webs_server* server, int as_thread) {
+  if (!server) return;
   if (as_thread) {
     /* fork further processing to seperate thread */
     if (pthread_create(&server->thread, 0, __webs_main, server))
