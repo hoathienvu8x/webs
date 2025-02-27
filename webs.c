@@ -936,6 +936,7 @@ static void* __webs_client_main(void* _self) {
       if (*self->srv->events.on_error)
         (*self->srv->events.on_error)(self, WEBS_ERR_NO_SUPPORT);
 
+      __webs_dispose(data);
       __webs_flush(self, frm.off + frm.length - 2);
       continue;
     }
@@ -945,6 +946,7 @@ static void* __webs_client_main(void* _self) {
       if (*self->srv->events.on_error)
         (*self->srv->events.on_error)(self, WEBS_ERR_OVERFLOW);
 
+      __webs_dispose(data);
       __webs_flush(self, frm.off + frm.length - 2);
       continue;
     }
@@ -959,6 +961,7 @@ static void* __webs_client_main(void* _self) {
       else
         webs_pong(self);
 
+      __webs_dispose(data);
       continue;
     }
 
@@ -969,6 +972,7 @@ static void* __webs_client_main(void* _self) {
       if (*self->srv->events.on_pong)
         (*self->srv->events.on_pong)(self);
 
+      __webs_dispose(data);
       continue;
     }
 
@@ -983,7 +987,6 @@ static void* __webs_client_main(void* _self) {
 
       if (__webs_asserted_read(self, data, frm.length) < 0) {
         error = WEBS_ERR_READ_FAILED;
-        __webs_dispose(data);
         break;
       }
 
@@ -1005,7 +1008,6 @@ static void* __webs_client_main(void* _self) {
 
       if (__webs_asserted_read(self, data + total, frm.length) < 0) {
         error = WEBS_ERR_READ_FAILED;
-        __webs_dispose(data);
         break;
       }
 
@@ -1033,6 +1035,7 @@ static void* __webs_client_main(void* _self) {
       if (*self->srv->events.on_error)
         (*self->srv->events.on_error)(self, WEBS_ERR_UNEXPECTED_CONTINUTATION);
 
+      __webs_dispose(data);
       __webs_flush(self, frm.off + frm.length - 2);
       continue;
     }
@@ -1090,6 +1093,7 @@ static void* __webs_client_main(void* _self) {
 
   ABORT:
 
+  __webs_dispose(data);
   __webs_close_socket(self->fd);
 
   pthread_cancel(self->thread);
