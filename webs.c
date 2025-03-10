@@ -1203,18 +1203,7 @@ int webs_send(webs_client* _self, const char* _data, int opcode) {
   return webs_sendn(_self, _data, strlen(_data), opcode);
 }
 int webs_broadcast(webs_client* _self, const char* _data, int opcode) {
-  webs_client* node;
-  if (!_self || !_self->srv) return -1;
-  pthread_mutex_lock(&_self->srv->mtx);
-  node = _self->srv->head;
-  while (node) {
-    if (node->id != _self->id) {
-      (void)webs_send(node, _data, opcode);
-    }
-    node = node->next;
-  }
-  pthread_mutex_unlock(&_self->srv->mtx);
-  return 0;
+  return webs_nbroadcast(_self, _data, _data ? strlen(_data) : 0, opcode);
 }
 void * webs_get_context(webs_client* _self) {
   if (!_self || !_self->srv) return NULL;
@@ -1274,16 +1263,7 @@ int webs_nbroadcast(webs_client* _self, const char* _data, ssize_t _n, int opcod
   return 0;
 }
 int webs_sendall(webs_server* _srv, const char* _data, int opcode) {
-  webs_client* node;
-  if (!_srv) return -1;
-  pthread_mutex_lock(&_srv->mtx);
-  node = _srv->head;
-  while (node) {
-    (void)webs_send(node, _data, opcode);
-    node = node->next;
-  }
-  pthread_mutex_unlock(&_srv->mtx);
-  return 0;
+  return webs_nsendall(_srv, _data, _data ? strlen(_data) : 0, opcode);
 }
 int webs_nsendall(webs_server* _srv, const char* _data, ssize_t _n, int opcode) {
   webs_client* node;
