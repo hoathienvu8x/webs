@@ -928,6 +928,9 @@ static void* __webs_client_main(void* _self) {
       break;
     }
 
+    if (__webs_get_client_state(self) != WS_STATE_OPEN) break;
+    if (self->srv && self->srv->is_stop) break;
+
     /* only accept supported frames */
     if (WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_CONT
      && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_TXT
@@ -1096,7 +1099,6 @@ static void* __webs_client_main(void* _self) {
   __webs_dispose(data);
   __webs_close_socket(self->fd);
 
-  pthread_cancel(self->thread);
   pthread_join(self->thread, 0);
 
   __webs_remove_client(self);
@@ -1107,8 +1109,10 @@ static void* __webs_client_main(void* _self) {
 static void * __webs_periodic(void * _srv) {
   webs_server * srv = (webs_server*) _srv;
   if (!srv) return NULL;
+  if (!(*srv->events.on_periodic) || srv->interval <= 0) return NULL;
   for (;;) {
     nsleep((long)srv->interval);
+    if (srv->is_stop) break;
     (*srv->events.on_periodic)(srv);
   }
   return NULL;
@@ -1125,14 +1129,18 @@ static void* __webs_main(void* _srv) {
 
   if (!srv) return NULL;
 
-  if (*srv->events.on_periodic && srv->interval > 0)
-    pthread_create(&srv->periodic, 0, __webs_periodic, srv);
+  pthread_create(&srv->periodic, 0, __webs_periodic, srv);
 
   for (;;) {
     if (__webs_accept_connection(srv->soc, &user_ptr) < 0)
       break;
 
     user_ptr->srv = srv;
+
+    if (srv->is_stop) {
+      webs_eject(user_ptr);
+      break;
+    }
 
     __webs_add_client(srv, user_ptr);
     __webs_set_client_state(user_ptr, WS_STATE_CONNECTING);
@@ -1141,12 +1149,11 @@ static void* __webs_main(void* _srv) {
   }
 
   if (srv->periodic) {
-    pthread_cancel(srv->periodic);
     pthread_join(srv->periodic, 0);
   }
 
   if (srv->thread)
-    pthread_cancel(srv->thread);
+    pthread_join(srv->thread, 0);
 
   return NULL;
 }
@@ -1161,7 +1168,7 @@ void webs_eject(webs_client* _self) {
   __webs_set_client_state(_self, WS_STATE_CLOSED);
 
   __webs_close_socket(_self->fd);
-  pthread_cancel(_self->thread);
+
   pthread_join(_self->thread, 0);
 
   __webs_remove_client(_self);
@@ -1172,15 +1179,15 @@ void webs_close(webs_server* _srv) {
   webs_client* temp;
 
   if (!_srv) return;
+  _srv->is_stop = 1;
+
   node = _srv->head;
 
   if (_srv->periodic) {
-    pthread_cancel(_srv->periodic);
     pthread_join(_srv->periodic, 0);
   }
 
   if (_srv->thread) {
-    pthread_cancel(_srv->thread);
     pthread_join(_srv->thread, 0);
   }
 
@@ -1219,6 +1226,7 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   __webs_bzero(&soc_buffer, sizeof(soc_buffer));
 
   if (__webs_get_client_state(_self) != WS_STATE_OPEN) return 0;
+  if (_self->srv && _self->srv->is_stop) return 0;
   /* len < 126 -> index = 2, len = 126 -> index = 4, len > 126 -> index = 10 */
   /* check for NULL or empty string */
   if (!_data || !*_data) return 0;
@@ -1251,6 +1259,7 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
 int webs_nbroadcast(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   webs_client* node;
   if (!_self || !_self->srv) return -1;
+  if (_self->srv->is_stop) return -1;
   pthread_mutex_lock(&_self->srv->mtx);
   node = _self->srv->head;
   while (node) {
@@ -1268,6 +1277,7 @@ int webs_sendall(webs_server* _srv, const char* _data, int opcode) {
 int webs_nsendall(webs_server* _srv, const char* _data, ssize_t _n, int opcode) {
   webs_client* node;
   if (!_srv) return -1;
+  if (_srv->is_stop) return -1;
   pthread_mutex_lock(&_srv->mtx);
   node = _srv->head;
   while (node) {
@@ -1376,6 +1386,7 @@ webs_server* webs_create(int _port, void * data) {
 
 void webs_start(webs_server* server, int as_thread) {
   if (!server) return;
+  server->is_stop = 0;
   if (as_thread) {
     /* fork further processing to seperate thread */
     if (pthread_create(&server->thread, 0, __webs_main, server))

@@ -50,7 +50,7 @@ struct webs_buffer {
  */
 struct webs_event_list {
   void (*on_error)(struct webs_client*, enum webs_error);
-  void (*on_data )(struct webs_client*, int, const char*, ssize_t);
+  void (*on_data )(struct webs_client*, int, const char*, size_t);
   void (*on_open )(struct webs_client*);
   void (*on_close)(struct webs_client*);
   void (*on_pong)(struct webs_client*);
@@ -61,8 +61,8 @@ struct webs_event_list {
 
 struct webs_socket {
   char data[WEBS_MAX_PACKET];
-  ssize_t len;
-  ssize_t pos;
+  size_t len;
+  size_t pos;
 };
 
 /* 
@@ -97,6 +97,7 @@ struct webs_server {
   pthread_t periodic;
   pthread_mutex_t mtx;
   int interval;
+  int is_stop;
 };
 
 /**
