@@ -795,11 +795,11 @@ static int __webs_accept_connection(int _soc, webs_client** _c) {
   /* static id counter variable */
   static size_t client_id_counter = 0;
 
-  struct sockaddr_storage sa;
-  socklen_t salen;
+  struct sockaddr_in addr;
+  socklen_t addr_size = sizeof(addr);
   webs_client *c = NULL;
 
-  int fd = accept(_soc, (struct sockaddr *)&sa, &salen);
+  int fd = accept(_soc, (struct sockaddr *)&addr, &addr_size);
   if (fd < 0) {
     WEBS_XERR("Error on accepting connections..", errno);
     return -1;
