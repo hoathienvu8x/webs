@@ -846,7 +846,7 @@ static int __webs_accept_connection(int _soc, webs_client** _c) {
 static void* __webs_client_main(void* _self) {
   webs_client* self = (webs_client*) _self;
   ssize_t total = 0, _n = -1;
-  ssize_t error;
+  ssize_t error = 0;
 
   /* flag set if frame is a continuation one */
   int cont = 0;
