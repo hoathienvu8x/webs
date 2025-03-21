@@ -1414,11 +1414,15 @@ webs_server* webs_create(int _port, void * data) {
 
   /* Port. */
   error = snprintf(port, sizeof(port) - 1, "%d", _port);
-  if (error <= 0)
+  if (error <= 0) {
+    __webs_dispose(server);
     WEBS_XERR("snprintf() failed", errno);
+  }
 
-  if (getaddrinfo(NULL, port, &hints, &results) != 0)
+  if (getaddrinfo(NULL, port, &hints, &results) != 0) {
+    __webs_dispose(server);
     WEBS_XERR("getaddrinfo() failed", errno);
+  }
 
   for (try = results; try != NULL; try = try->ai_next) {
     /* try to make a socket with this setup */
@@ -1427,29 +1431,30 @@ webs_server* webs_create(int _port, void * data) {
       continue;
     }
 
+    error = setsockopt(soc, SOL_SOCKET, SO_REUSEADDR, (const char *)&ONE,
+      sizeof(ONE));
     /* Reuse previous address. */
-    if (setsockopt(soc, SOL_SOCKET, SO_REUSEADDR, (const char *)&ONE,
-      sizeof(ONE)) < 0) {
-      WEBS_XERR("setsockopt(SO_REUSEADDR) failed", errno);
+    if (error == 0 && bind(soc, try->ai_addr, try->ai_addrlen) < 0) {
+      break;
     }
 
-    /* Bind. */
-    if (bind(soc, try->ai_addr, try->ai_addrlen) < 0)
-      WEBS_XERR("Bind failed", errno);
-
-    /* if it worked, we're done. */
-    break;
+    __webs_close_handle(soc);
   }
 
   freeaddrinfo(results);
 
   /* Check if binded with success. */
-  if (try == NULL) {
+  if (try == NULL || soc < 0) {
+    __webs_dispose(server);
     WEBS_XERR("couldn't find a port to bind to", errno);
   }
 
   error = listen(soc, WEBS_MAX_BACKLOG);
-  if (error < 0) return NULL;
+  if (error < 0) {
+    __webs_close_handle(soc);
+    __webs_dispose(server);
+    return NULL;
+  }
 
   epoll_fd = epoll_create1(0);
   if (epoll_fd < 0) {
@@ -1460,6 +1465,7 @@ webs_server* webs_create(int _port, void * data) {
 
   if (pthread_mutex_init(&server->mtx, NULL)) {
     __webs_close_handle(soc);
+    __webs_close_handle(epoll_fd);
     __webs_dispose(server);
     WEBS_XERR("Failed to allocate mutex!", ENOMEM);
   }
