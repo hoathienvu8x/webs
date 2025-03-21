@@ -1048,7 +1048,7 @@ static void __webs_client_main(void* _self) {
     /* deal with normal frames (non-fragmented) */
     if (WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_CONT) {
       /* read data */
-      if (data) __webs_dispose(data);
+      __webs_dispose(data);
       data = __webs_malloc(frm.length + 1);
 
       if (data == NULL)
@@ -1111,12 +1111,6 @@ static void __webs_client_main(void* _self) {
 
     /* respond to close */
     if (WEBSFR_GET_OPCODE(frm.info) == WS_FR_OP_CLSE) {
-      pthread_mutex_lock(&self->mtx_snd);
-      soc_buffer.len = __webs_make_frame(data, soc_buffer.data,
-        frm.length, WS_FR_OP_CLSE, 0x1);
-
-      (void)__webs_asserted_write(self->fd, soc_buffer.data, soc_buffer.len);
-      pthread_mutex_unlock(&self->mtx_snd);
       error = 0;
       break;
     }
@@ -1150,13 +1144,6 @@ static void __webs_client_main(void* _self) {
     if (*self->srv->events.on_error)
       (*self->srv->events.on_error)(self, error);
   }
-
-  __webs_set_client_state(self, WS_STATE_CLOSING);
-
-  if (*self->srv->events.on_close)
-    (*self->srv->events.on_close)(self);
-
-  __webs_set_client_state(self, WS_STATE_CLOSED);
 
   ABORT:
 
