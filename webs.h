@@ -71,7 +71,6 @@ struct webs_socket {
 struct webs_client {
   struct webs_server* srv; /* a pointer to the server the the
                             *   clinet is connected to */
-  pthread_t thread;        /* client's posix thread id */
   size_t id;               /* client's internal id */
   int fd;                  /* client's descriptor */
   struct webs_socket buf;
@@ -97,7 +96,7 @@ struct webs_server {
   pthread_t periodic;
   pthread_mutex_t mtx;
   int interval;
-  int is_stop;
+  int epoll_fd;
 };
 
 /**

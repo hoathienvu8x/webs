@@ -1,10 +1,12 @@
 #include "webs.h"
 #include <math.h>
 #include <netdb.h>
+#include <fcntl.h>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/epoll.h>
 
 #define WEBS_MAX_PAD (WEBS_MAX_PACKET - 11)
 
@@ -152,6 +154,32 @@ uint8_t WEBSFR_FINISH_MASK[2] = {0x80, 0x00};
 uint8_t WEBSFR_RESVRD_MASK[2] = {0x70, 0x00};
 
 
+/* Macros */
+#define __webs_close_handle(fd)       \
+{                                     \
+  if (                                \
+    shutdown(fd, SHUT_RDWR) == 0 &&   \
+    close(fd) == 0                    \
+  ) {                                 \
+    fd = -1;                          \
+  }                                   \
+}
+
+#define __webs_recv_rollback(conn, n, l)                         \
+{                                                                \
+  if (n <= 0) {                                                  \
+    if (errno == EAGAIN || errno == EWOULDBLOCK) continue;       \
+    if (conn->srv && *conn->srv->events.on_error) {              \
+      (*conn->srv->events.on_error)(conn, WEBS_ERR_READ_FAILED); \
+    }                                                            \
+    break;                                                       \
+  }                                                              \
+  if (n < l) {                                                   \
+    conn->buf.pos -= n;                                          \
+    continue;                                                    \
+  }                                                              \
+}
+
 #define __webs_dispose(p) { \
   if((p)) {                 \
     free((p));              \
@@ -159,9 +187,9 @@ uint8_t WEBSFR_RESVRD_MASK[2] = {0x70, 0x00};
   }                         \
 }
 
-#define __webs_malloc(sz) malloc(sz)
-#define __webs_realloc(dst,sz) realloc(dst, sz)
-#define __webs_bzero(dst,sz) memset(dst, 0, sz)
+#define __webs_malloc(sz)       malloc(sz)
+#define __webs_realloc(dst,sz)  realloc(dst, sz)
+#define __webs_bzero(dst,sz)    memset(dst, 0, sz)
 
 /* 
  * stores header data from a websocket frame.
@@ -205,6 +233,32 @@ static int __webs_strcasecmp(const char *s1, const char *s2) {
     if (c1 == '\0') return c1 - c2;
   } while (c1 == c2);
   return c1 - c2;
+}
+
+static int __webs_epoll_add(int epoll_fd, int fd, uint32_t events) {
+  struct epoll_event event;
+
+  memset(&event, 0, sizeof(struct epoll_event));
+
+  event.events  = events;
+  event.data.fd = fd;
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0) {
+    return -1;
+  }
+  return 0;
+}
+
+static int __webs_epoll_delete(int epoll_fd, int fd) {
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL) < 0) {
+    return -1;
+  }
+  return 0;
+}
+
+static int __webs_set_non_blocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0) return -1;
+  return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
 /* 
@@ -371,7 +425,7 @@ static int __webs_b64_encode(char* _s, char* _d, size_t _n) {
 
   return i + 4;
 }
-static void nsleep(long msec) {
+static void __webs_nsleep(long msec) {
   struct timespec ts, rs;
   int rc = -1;
   if (msec <= 0) {
@@ -394,10 +448,7 @@ static void nsleep(long msec) {
     rc = nanosleep(&rs, &ts);
   } while (rc == -1 && errno == EINTR);
 }
-static int __webs_close_socket(int fd) {
-  shutdown(fd, SHUT_RDWR);
-  return close(fd);
-}
+
 #ifdef VALIDATE_UTF8
 static int num_bytes_in_utf8_sequence(unsigned char c) {
   if (c == 0xC0 || c == 0xC1 || c > 0xF4 || IS_CONT(c)) return 0;
@@ -529,54 +580,57 @@ static ssize_t __webs_flush(webs_client* cli, size_t _n) {
  * @return -1 if the frame could not be parsed, or 0 otherwise.
  */
 static int __webs_parse_frame(webs_client* _self, struct webs_frame* _frm) {
-  ssize_t error;
+  ssize_t n;
 
-  /* read the 2-byte header field */
-  error = __webs_asserted_read(_self, &_frm->info, 2);
-  if (error < 0) return -1; /* read(2) error, maybe broken pipe */
+  for (;;) {
+    /* read the 2-byte header field */
+    n = __webs_asserted_read(_self, &_frm->info, 2);
+    __webs_recv_rollback(_self, n, 2); /* read(2) error, maybe broken pipe */
 
-  /* read the length field (may offset payload) */
-  _frm->off = 2;
+    /* read the length field (may offset payload) */
+    _frm->off = 2;
 
-  /* a value of 126 here says to interpret the next two bytes */
-  if (WEBSFR_GET_LENGTH(_frm->info) == 126) {
-    error = __webs_asserted_read(_self, &_frm->length, 2);
-    if (error < 0) return -1; /* read(2) error, maybe broken pipe */
+    /* a value of 126 here says to interpret the next two bytes */
+    if (WEBSFR_GET_LENGTH(_frm->info) == 126) {
+      n = __webs_asserted_read(_self, &_frm->length, 2);
+      __webs_recv_rollback(_self, n, 2); /* read(2) error, maybe broken pipe */
 
-    _frm->off = 4;
-    _frm->length = WEBS_BIG_ENDIAN_WORD(_frm->length);
+      _frm->off = 4;
+      _frm->length = WEBS_BIG_ENDIAN_WORD(_frm->length);
+    }
+
+    /* a value of 127 says to interpret the next eight bytes */
+    else if (WEBSFR_GET_LENGTH(_frm->info) == 127) {
+      n = __webs_asserted_read(_self, &_frm->length, 8);
+      __webs_recv_rollback(_self, n, 8); /* read(2) error, maybe broken pipe */
+
+      _frm->off = 10;
+      _frm->length = WEBS_BIG_ENDIAN_QWORD(_frm->length);
+    }
+
+    /* otherwise, the raw value is used */
+    else _frm->length = WEBSFR_GET_LENGTH(_frm->info);
+
+    /* if the data is masked, the payload is further offset
+     * to fit a four byte key */
+    if (WEBSFR_GET_MASKED(_frm->info)) {
+      n = __webs_asserted_read(_self, &_frm->key, 4);
+      __webs_recv_rollback(_self, n, 4); /* read(2) error, maybe broken pipe */
+    }
+
+    /* if it is not masked, then by the specification (RFC-6455), the
+     * connection should be closed */
+    else return -1;
+
+    /* by the specification (RFC-6455), since no extensions are yet
+     * supported, if we recieve non-zero reserved bits the connection
+     * should be closed */
+    if (WEBSFR_GET_RESVRD(_frm->info) != 0)
+      return -1;
+
+    return 0;
   }
-
-  /* a value of 127 says to interpret the next eight bytes */
-  else if (WEBSFR_GET_LENGTH(_frm->info) == 127) {
-    error = __webs_asserted_read(_self, &_frm->length, 8);
-    if (error < 0) return -1; /* read(2) error, maybe broken pipe */
-
-    _frm->off = 10;
-    _frm->length = WEBS_BIG_ENDIAN_QWORD(_frm->length);
-  }
-
-  /* otherwise, the raw value is used */
-  else _frm->length = WEBSFR_GET_LENGTH(_frm->info);
-
-  /* if the data is masked, the payload is further offset
-   * to fit a four byte key */
-  if (WEBSFR_GET_MASKED(_frm->info)) {
-    error = __webs_asserted_read(_self, &_frm->key, 4);
-    if (error < 1) return -1; /* read(2) error, maybe broken pipe */
-  }
-
-  /* if it is not masked, then by the specification (RFC-6455), the
-   * connection should be closed */
-  else return -1;
-
-  /* by the specification (RFC-6455), since no extensions are yet
-   * supported, if we recieve non-zero reserved bits the connection
-   * should be closed */
-  if (WEBSFR_GET_RESVRD(_frm->info) != 0)
-    return -1;
-
-  return 0;
+  return -1;
 }
 
 /* 
@@ -791,7 +845,7 @@ static void __webs_add_client(webs_server* _srv, webs_client * node) {
  * @param _cli: the client that is to be connected.
  * @return -1 on error, or 0 otherwise.
  */
-static int __webs_accept_connection(int _soc, webs_client** _c) {
+static int __webs_accept_connection(webs_server *_srv, webs_client** _c) {
   /* static id counter variable */
   static size_t client_id_counter = 0;
 
@@ -799,15 +853,25 @@ static int __webs_accept_connection(int _soc, webs_client** _c) {
   socklen_t addr_size = sizeof(addr);
   webs_client *c = NULL;
 
-  int fd = accept(_soc, (struct sockaddr *)&addr, &addr_size);
+  int fd = accept(_srv->soc, (struct sockaddr *)&addr, &addr_size);
   if (fd < 0) {
-    WEBS_XERR("Error on accepting connections..", errno);
+    if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
     return -1;
+  }
+
+  if (__webs_set_non_blocking(fd)) {
+    __webs_close_handle(fd);
+    return 0;
+  }
+
+  if (__webs_epoll_add(_srv->epoll_fd, fd, EPOLLIN | EPOLLPRI)) {
+    __webs_close_handle(fd);
+    return 0;
   }
 
   c = __webs_malloc(sizeof(webs_client));
   if (!c) {
-    __webs_close_socket(fd);
+    __webs_close_handle(fd);
     WEBS_XERR("Failed to allocate memory!", ENOMEM);
     return -1;
   }
@@ -815,15 +879,15 @@ static int __webs_accept_connection(int _soc, webs_client** _c) {
   __webs_bzero(c, sizeof(webs_client));
 
   if (pthread_mutex_init(&c->mtx_sta, NULL)) {
-    __webs_close_socket(fd);
+    __webs_close_handle(fd);
     WEBS_XERR("Failed to allocate state mutex!", ENOMEM);
-    return -1;
+    return 0;
   }
 
   if (pthread_mutex_init(&c->mtx_snd, NULL)) {
-    __webs_close_socket(fd);
+    __webs_close_handle(fd);
     WEBS_XERR("Failed to allocate send mutex!", ENOMEM);
-    return -1;
+    return 0;
   }
   c->fd = fd;
   c->id = client_id_counter;
@@ -843,7 +907,7 @@ static int __webs_accept_connection(int _soc, webs_client** _c) {
  * connected client.
  * @param _self: the client who is calling.
  */
-static void* __webs_client_main(void* _self) {
+static void __webs_client_main(void* _self) {
   webs_client* self = (webs_client*) _self;
   ssize_t total = 0, _n = -1;
   ssize_t error = 0;
@@ -869,58 +933,60 @@ static void* __webs_client_main(void* _self) {
   __webs_bzero(&ws_info, sizeof(ws_info));
   __webs_bzero(&frm, sizeof(frm));
 
-  if (!self) return NULL;
+  if (!self) return;
 
-  /* wait for HTTP websocket request header */
-  do {
-    _n = __webs_asserted_read(self, soc_buffer.data + soc_buffer.len, 1);
-    if (_n < 0) goto ABORT;
-    soc_buffer.len += _n;
-    if (strstr(soc_buffer.data, "\r\n\r\n")) {
-      soc_buffer.len -= 4;
-      break;
-    }
-    if (soc_buffer.len >= WEBS_MAX_PACKET) break;
-  } while (_n > 0);
+  if (__webs_get_client_state(self) == WS_STATE_CONNECTING) {
+    /* wait for HTTP websocket request header */
+    do {
+      _n = __webs_asserted_read(self, soc_buffer.data + soc_buffer.len, 1);
+      if (_n < 0) goto ABORT;
+      soc_buffer.len += _n;
+      if (strstr(soc_buffer.data, "\r\n\r\n")) {
+        soc_buffer.len -= 4;
+        break;
+      }
+      if (soc_buffer.len >= WEBS_MAX_PACKET) break;
+    } while (_n > 0);
 
-  /* if we did not recieve one, abort */
-  if (soc_buffer.len == 0 || strstr(soc_buffer.data, "\r\n\r\n") == NULL)
-    goto ABORT;
-
-  /* process handshake */
-  soc_buffer.data[soc_buffer.len] = '\0';
-
-  /* if we failed, abort */
-  if (__webs_process_handshake(soc_buffer.data, &ws_info) < 0)
-    goto ABORT;
-
-  if (*self->srv->events.is_route) {
-    char path[256] = {0};
-    size_t p = strcspn(ws_info.path, "?# ");
-    if (p != strlen(ws_info.path)) {
-      memcpy(path, ws_info.path, p);
-      path[p] = '\0';
-    } else {
-      memcpy(path, ws_info.path, strlen(ws_info.path));
-    }
-    if (!(*self->srv->events.is_route)(self, path)) {
+    /* if we did not recieve one, abort */
+    if (soc_buffer.len == 0 || strstr(soc_buffer.data, "\r\n\r\n") == NULL)
       goto ABORT;
+
+    /* process handshake */
+    soc_buffer.data[soc_buffer.len] = '\0';
+
+    /* if we failed, abort */
+    if (__webs_process_handshake(soc_buffer.data, &ws_info) < 0)
+      goto ABORT;
+
+    if (*self->srv->events.is_route) {
+      char path[256] = {0};
+      size_t p = strcspn(ws_info.path, "?# ");
+      if (p != strlen(ws_info.path)) {
+        memcpy(path, ws_info.path, p);
+        path[p] = '\0';
+      } else {
+        memcpy(path, ws_info.path, strlen(ws_info.path));
+      }
+      if (!(*self->srv->events.is_route)(self, path)) {
+        goto ABORT;
+      }
     }
+
+    /* if we succeeded, generate + tansmit response */
+    soc_buffer.len = __webs_generate_handshake(soc_buffer.data,
+      ws_info.webs_key);
+
+    if (__webs_asserted_write(self->fd, soc_buffer.data, soc_buffer.len) < 0)
+      goto ABORT;
+
+    __webs_set_client_state(self, WS_STATE_OPEN);
+
+    /* call client on_open function */
+    if (*self->srv->events.on_open)
+      (*self->srv->events.on_open)(self);
+
   }
-
-  /* if we succeeded, generate + tansmit response */
-  soc_buffer.len = __webs_generate_handshake(soc_buffer.data,
-    ws_info.webs_key);
-
-  if (__webs_asserted_write(self->fd, soc_buffer.data, soc_buffer.len) < 0)
-    goto ABORT;
-
-  __webs_set_client_state(self, WS_STATE_OPEN);
-
-  /* call client on_open function */
-  if (*self->srv->events.on_open)
-    (*self->srv->events.on_open)(self);
-
   /* main loop */
   for (;;) {
     if (__webs_parse_frame(self, &frm) < 0) {
@@ -929,7 +995,6 @@ static void* __webs_client_main(void* _self) {
     }
 
     if (__webs_get_client_state(self) != WS_STATE_OPEN) break;
-    if (self->srv && self->srv->is_stop) break;
 
     /* only accept supported frames */
     if (WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_CONT
@@ -943,7 +1008,7 @@ static void* __webs_client_main(void* _self) {
 
       __webs_dispose(data);
       __webs_flush(self, frm.off + frm.length - 2);
-      continue;
+      return;
     }
 
     /* check if packet is too big */
@@ -953,7 +1018,7 @@ static void* __webs_client_main(void* _self) {
 
       __webs_dispose(data);
       __webs_flush(self, frm.off + frm.length - 2);
-      continue;
+      return;
     }
 
     /* respond to ping */
@@ -967,7 +1032,7 @@ static void* __webs_client_main(void* _self) {
         webs_pong(self);
 
       __webs_dispose(data);
-      continue;
+      return;
     }
 
     /* handle pong */
@@ -978,7 +1043,7 @@ static void* __webs_client_main(void* _self) {
         (*self->srv->events.on_pong)(self);
 
       __webs_dispose(data);
-      continue;
+      return;
     }
 
     /* deal with normal frames (non-fragmented) */
@@ -1000,7 +1065,7 @@ static void* __webs_client_main(void* _self) {
 
       if (!WEBSFR_GET_FINISH(frm.info)) {
         cont = 1;
-        continue;
+        return;
       }
     }
 
@@ -1029,7 +1094,7 @@ static void* __webs_client_main(void* _self) {
       total += frm.length;
 
       if (!WEBSFR_GET_FINISH(frm.info))
-        continue;
+        return;
 
       cont = 0;
     }
@@ -1042,7 +1107,7 @@ static void* __webs_client_main(void* _self) {
 
       __webs_dispose(data);
       __webs_flush(self, frm.off + frm.length - 2);
-      continue;
+      return;
     }
 
     /* respond to close */
@@ -1078,7 +1143,7 @@ static void* __webs_client_main(void* _self) {
     }
 
     __webs_dispose(data);
-    continue;
+    return;
   }
 
   /* call client on_error if there was an error */
@@ -1097,13 +1162,7 @@ static void* __webs_client_main(void* _self) {
   ABORT:
 
   __webs_dispose(data);
-  __webs_close_socket(self->fd);
-
-  pthread_join(self->thread, 0);
-
-  __webs_remove_client(self);
-
-  return NULL;
+  webs_eject(self);
 }
 
 static void * __webs_periodic(void * _srv) {
@@ -1111,8 +1170,7 @@ static void * __webs_periodic(void * _srv) {
   if (!srv) return NULL;
   if (!(*srv->events.on_periodic) || srv->interval <= 0) return NULL;
   for (;;) {
-    nsleep((long)srv->interval);
-    if (srv->is_stop) break;
+    __webs_nsleep((long)srv->interval);
     (*srv->events.on_periodic)(srv);
   }
   return NULL;
@@ -1126,52 +1184,86 @@ static void * __webs_periodic(void * _srv) {
 static void* __webs_main(void* _srv) {
   webs_server* srv = (webs_server*) _srv;
   webs_client* user_ptr = NULL;
+  int i, epoll_ret;
+  struct epoll_event events[64];
+  webs_client *node = NULL;
 
   if (!srv) return NULL;
 
   pthread_create(&srv->periodic, 0, __webs_periodic, srv);
 
   for (;;) {
-    if (__webs_accept_connection(srv->soc, &user_ptr) < 0)
-      break;
+    epoll_ret = epoll_wait(srv->epoll_fd, events, 64, -1);
 
-    user_ptr->srv = srv;
+    if (epoll_ret == 0) continue;
 
-    if (srv->is_stop) {
-      webs_eject(user_ptr);
+    if (epoll_ret == -1) {
+      if (errno == EINTR) continue;
       break;
     }
 
-    __webs_add_client(srv, user_ptr);
-    __webs_set_client_state(user_ptr, WS_STATE_CONNECTING);
-    if (pthread_create(&user_ptr->thread, 0, __webs_client_main, user_ptr))
-      WEBS_XERR("Could not create the client thread!", ENOMEM);
+    for (i = 0; i < epoll_ret; i++) {
+      if (events[i].data.fd == srv->soc) {
+        if (__webs_accept_connection(srv, &user_ptr) < 0)
+          break;
+
+        user_ptr->srv = srv;
+
+        pthread_mutex_lock(&srv->mtx);
+        __webs_add_client(srv, user_ptr);
+        pthread_mutex_unlock(&srv->mtx);
+        __webs_set_client_state(user_ptr, WS_STATE_CONNECTING);
+
+        continue;
+      }
+
+      if (events[i].events & (EPOLLERR | EPOLLHUP)) {
+        __webs_close_handle(events[i].data.fd);
+        continue;
+      }
+
+      pthread_mutex_lock(&srv->mtx);
+      node = srv->head;
+      while (node) {
+        if (node->fd == events[i].data.fd) {
+          break;
+        }
+        node = node->next;
+      }
+      pthread_mutex_unlock(&srv->mtx);
+
+      __webs_client_main(node);
+    }
   }
 
   if (srv->periodic) {
     pthread_join(srv->periodic, 0);
   }
 
-  if (srv->thread)
-    pthread_join(srv->thread, 0);
-
   return NULL;
 }
 
 void webs_eject(webs_client* _self) {
+  webs_server *srv = NULL;
+
   if (!_self) return;
 
+  srv = _self->srv;
+
+  if (srv) __webs_epoll_delete(srv->epoll_fd, _self->fd);
+
   __webs_set_client_state(_self, WS_STATE_CLOSING);
-  if (*_self->srv->events.on_close)
-    (*_self->srv->events.on_close)(_self);
+
+  if (*srv->events.on_close)
+    (*srv->events.on_close)(_self);
 
   __webs_set_client_state(_self, WS_STATE_CLOSED);
 
-  __webs_close_socket(_self->fd);
+  __webs_close_handle(_self->fd);
 
-  pthread_join(_self->thread, 0);
-
+  if (srv) pthread_mutex_lock(&srv->mtx);
   __webs_remove_client(_self);
+  if (srv) pthread_mutex_unlock(&srv->mtx);
 }
 
 void webs_close(webs_server* _srv) {
@@ -1179,7 +1271,6 @@ void webs_close(webs_server* _srv) {
   webs_client* temp;
 
   if (!_srv) return;
-  _srv->is_stop = 1;
 
   node = _srv->head;
 
@@ -1191,7 +1282,7 @@ void webs_close(webs_server* _srv) {
     pthread_join(_srv->thread, 0);
   }
 
-  __webs_close_socket(_srv->soc);
+  __webs_close_handle(_srv->soc);
 
   pthread_mutex_destroy(&_srv->mtx);
 
@@ -1226,7 +1317,6 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   __webs_bzero(&soc_buffer, sizeof(soc_buffer));
 
   if (__webs_get_client_state(_self) != WS_STATE_OPEN) return 0;
-  if (_self->srv && _self->srv->is_stop) return 0;
   /* len < 126 -> index = 2, len = 126 -> index = 4, len > 126 -> index = 10 */
   /* check for NULL or empty string */
   if (!_data || !*_data) return 0;
@@ -1259,7 +1349,6 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
 int webs_nbroadcast(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
   webs_client* node;
   if (!_self || !_self->srv) return -1;
-  if (_self->srv->is_stop) return -1;
   pthread_mutex_lock(&_self->srv->mtx);
   node = _self->srv->head;
   while (node) {
@@ -1277,7 +1366,6 @@ int webs_sendall(webs_server* _srv, const char* _data, int opcode) {
 int webs_nsendall(webs_server* _srv, const char* _data, ssize_t _n, int opcode) {
   webs_client* node;
   if (!_srv) return -1;
-  if (_srv->is_stop) return -1;
   pthread_mutex_lock(&_srv->mtx);
   node = _srv->head;
   while (node) {
@@ -1304,7 +1392,7 @@ webs_server* webs_create(int _port, void * data) {
   static size_t server_id_counter = 0;
 
   const int ONE = 1;
-  int error = 0, soc = -1;
+  int error = 0, soc = -1, epoll_fd = -1;
   struct addrinfo hints, *results, *try;
   char port[8] = {0};
 
@@ -1330,7 +1418,7 @@ webs_server* webs_create(int _port, void * data) {
 
   for (try = results; try != NULL; try = try->ai_next) {
     /* try to make a socket with this setup */
-    if ((soc = socket(try->ai_family, try->ai_socktype,
+    if ((soc = socket(try->ai_family, try->ai_socktype | SOCK_NONBLOCK,
       try->ai_protocol)) < 0) {
       continue;
     }
@@ -1349,21 +1437,31 @@ webs_server* webs_create(int _port, void * data) {
     break;
   }
 
+  freeaddrinfo(results);
+
   /* Check if binded with success. */
   if (try == NULL) {
-    freeaddrinfo(results);
     WEBS_XERR("couldn't find a port to bind to", errno);
   }
-
-  freeaddrinfo(results);
 
   error = listen(soc, WEBS_MAX_BACKLOG);
   if (error < 0) return NULL;
 
-  if (pthread_mutex_init(&server->mtx, NULL))
+  epoll_fd = epoll_create1(0);
+  if (epoll_fd < 0) {
+    __webs_close_handle(soc);
+    __webs_dispose(server);
+    WEBS_XERR("Failed to create epoll fd!", ENOMEM);
+  }
+
+  if (pthread_mutex_init(&server->mtx, NULL)) {
+    __webs_close_handle(soc);
+    __webs_dispose(server);
     WEBS_XERR("Failed to allocate mutex!", ENOMEM);
+  }
 
   server->soc = soc;
+  server->epoll_fd = epoll_fd;
   server->data = data;
   server->interval = 1000000;
 
@@ -1386,7 +1484,9 @@ webs_server* webs_create(int _port, void * data) {
 
 void webs_start(webs_server* server, int as_thread) {
   if (!server) return;
-  server->is_stop = 0;
+  if (__webs_epoll_add(server->epoll_fd, server->soc, EPOLLIN | EPOLLPRI)) {
+    return;
+  }
   if (as_thread) {
     /* fork further processing to seperate thread */
     if (pthread_create(&server->thread, 0, __webs_main, server))
