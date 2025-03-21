@@ -1065,7 +1065,7 @@ static void __webs_client_main(void* _self) {
 
       if (!WEBSFR_GET_FINISH(frm.info)) {
         cont = 1;
-        return;
+        continue;
       }
     }
 
@@ -1094,7 +1094,7 @@ static void __webs_client_main(void* _self) {
       total += frm.length;
 
       if (!WEBSFR_GET_FINISH(frm.info))
-        return;
+        continue;
 
       cont = 0;
     }
