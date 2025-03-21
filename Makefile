@@ -23,7 +23,7 @@ compile:
 	$(CC) -c *.c examples/test.c $(CFLAGS) -std=$(STD) $(CONST)
 
 build: compile
-	$(CC) -o webs *.o -lpthread -lm $(CONST)
+	$(CC) -o webs *.o -lpthread $(CONST)
 
 clean:
 	-rm -f webs 

@@ -1,5 +1,4 @@
 #include "webs.h"
-#include <math.h>
 #include <netdb.h>
 #include <fcntl.h>
 
@@ -776,7 +775,7 @@ static int __webs_get_client_state(webs_client* _self) {
 
 static int __webs_set_client_state(webs_client* _self, int state) {
   if (!_self) return -1;
-  if (state < 0 || state > 3)
+  if (state < WS_STATE_CONNECTING || state > WS_STATE_CLOSED)
     return -1;
   pthread_mutex_lock(&_self->mtx_sta);
   if (_self->state != state)
@@ -1250,7 +1249,8 @@ void webs_eject(webs_client* _self) {
 
   srv = _self->srv;
 
-  if (srv) __webs_epoll_delete(srv->epoll_fd, _self->fd);
+  if (srv)
+    __webs_epoll_delete(srv->epoll_fd, _self->fd);
 
   __webs_set_client_state(_self, WS_STATE_CLOSING);
 
@@ -1261,9 +1261,13 @@ void webs_eject(webs_client* _self) {
 
   __webs_close_handle(_self->fd);
 
-  if (srv) pthread_mutex_lock(&srv->mtx);
+  if (srv)
+    pthread_mutex_lock(&srv->mtx);
+
   __webs_remove_client(_self);
-  if (srv) pthread_mutex_unlock(&srv->mtx);
+
+  if (srv)
+    pthread_mutex_unlock(&srv->mtx);
 }
 
 void webs_close(webs_server* _srv) {
@@ -1328,7 +1332,7 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
     return rc;
   }
   pthread_mutex_lock(&_self->mtx_snd);
-  frame_count = ceil((float)_n / (float)(WEBS_MAX_PAD));
+  frame_count = _n + WEBS_MAX_PAD / WEBS_MAX_PAD;
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
     int size = i != frame_count - 1 ? WEBS_MAX_PAD : _n % WEBS_MAX_PAD;
