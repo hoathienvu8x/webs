@@ -910,6 +910,7 @@ static void __webs_client_main(void* _self) {
   webs_client* self = (webs_client*) _self;
   ssize_t total = 0, _n = -1;
   ssize_t error = 0;
+  size_t data_len = 0;
 
   /* flag set if frame is a continuation one */
   int cont = 0;
@@ -938,12 +939,17 @@ static void __webs_client_main(void* _self) {
     /* wait for HTTP websocket request header */
     do {
       _n = __webs_asserted_read(self, soc_buffer.data + soc_buffer.len, 1);
-      if (_n < 0) goto ABORT;
+      if (_n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+        goto ABORT;
+      }
       soc_buffer.len += _n;
       if (strstr(soc_buffer.data, "\r\n\r\n")) {
         soc_buffer.len -= 4;
         break;
       }
+      /* Check with WEBS_MAX_PACKAGE is ok not infinity loop but when header
+       * was sent more data we can't recv all data of headers */
       if (soc_buffer.len >= WEBS_MAX_PACKET) break;
     } while (_n > 0);
 
