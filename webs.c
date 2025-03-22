@@ -901,6 +901,20 @@ static int __webs_accept_connection(webs_server *_srv, webs_client** _c) {
   return fd;
 }
 
+static int __webs_recv_payload(webs_client *self, char *data, ssize_t length) {
+  ssize_t recv_length = 0;
+  ssize_t n;
+  do {
+    n = __webs_asserted_read(self, data + recv_length, length - recv_length);
+    if (n <= 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+      return -1;
+    }
+    recv_length += n;
+  } while (recv_length < length);
+  return (recv_length == length ? (int)length : -1);
+}
+
 /* 
  * main client function, called on a thread for each
  * connected client.
@@ -910,7 +924,6 @@ static void __webs_client_main(void* _self) {
   webs_client* self = (webs_client*) _self;
   ssize_t total = 0, _n = -1;
   ssize_t error = 0;
-  size_t data_len = 0;
 
   /* flag set if frame is a continuation one */
   int cont = 0;
@@ -967,12 +980,8 @@ static void __webs_client_main(void* _self) {
     if (*self->srv->events.is_route) {
       char path[256] = {0};
       size_t p = strcspn(ws_info.path, "?# ");
-      if (p != strlen(ws_info.path)) {
-        memcpy(path, ws_info.path, p);
-        path[p] = '\0';
-      } else {
-        memcpy(path, ws_info.path, strlen(ws_info.path));
-      }
+      memcpy(path, ws_info.path, p);
+      path[p] = '\0';
       if (!(*self->srv->events.is_route)(self, path)) {
         goto ABORT;
       }
@@ -1060,7 +1069,7 @@ static void __webs_client_main(void* _self) {
       if (data == NULL)
         WEBS_XERR("Failed to allocate memory!", ENOMEM);
 
-      if (__webs_asserted_read(self, data, frm.length) < 0) {
+      if (__webs_recv_payload(self, data, frm.length) < 0) {
         error = WEBS_ERR_READ_FAILED;
         break;
       }
@@ -1081,7 +1090,7 @@ static void __webs_client_main(void* _self) {
       if (data == NULL)
         WEBS_XERR("Failed to allocate memory!", ENOMEM);
 
-      if (__webs_asserted_read(self, data + total, frm.length) < 0) {
+      if (__webs_recv_payload(self, data + total, frm.length) < 0) {
         error = WEBS_ERR_READ_FAILED;
         break;
       }
@@ -1325,7 +1334,7 @@ int webs_sendn(webs_client* _self, const char* _data, ssize_t _n, int opcode) {
     return rc;
   }
   pthread_mutex_lock(&_self->mtx_snd);
-  frame_count = _n + WEBS_MAX_PAD / WEBS_MAX_PAD;
+  frame_count = (_n + WEBS_MAX_PAD) / WEBS_MAX_PAD;
   if (frame_count == 0) frame_count = 1;
   for (; i < frame_count; i++) {
     int size = i != frame_count - 1 ? WEBS_MAX_PAD : _n % WEBS_MAX_PAD;
@@ -1427,7 +1436,7 @@ webs_server* webs_create(int _port, void * data) {
     error = setsockopt(soc, SOL_SOCKET, SO_REUSEADDR, (const char *)&ONE,
       sizeof(ONE));
     /* Reuse previous address. */
-    if (error == 0 && bind(soc, try->ai_addr, try->ai_addrlen) < 0) {
+    if (error == 0 && bind(soc, try->ai_addr, try->ai_addrlen) == 0) {
       break;
     }
 
@@ -1438,6 +1447,7 @@ webs_server* webs_create(int _port, void * data) {
 
   /* Check if binded with success. */
   if (try == NULL || soc < 0) {
+    printf("soc = %d\n", soc);
     __webs_dispose(server);
     WEBS_XERR("couldn't find a port to bind to", errno);
   }
