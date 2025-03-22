@@ -9,6 +9,9 @@
 
 #define WEBS_MAX_PAD (WEBS_MAX_PACKET - 11)
 
+#define WEBS_MAX_EVENTS (64)
+#define WEBS_POLL_TIMEOUT (-1)
+
 #define WS_STATE_CONNECTING 0
 #define WS_STATE_OPEN       1
 #define WS_STATE_CLOSING    2
@@ -1186,7 +1189,7 @@ static void* __webs_main(void* _srv) {
   webs_server* srv = (webs_server*) _srv;
   webs_client* user_ptr = NULL;
   int i, epoll_ret;
-  struct epoll_event events[64];
+  struct epoll_event events[WEBS_MAX_EVENTS];
   webs_client *node = NULL;
 
   if (!srv) return NULL;
@@ -1194,7 +1197,7 @@ static void* __webs_main(void* _srv) {
   pthread_create(&srv->periodic, 0, __webs_periodic, srv);
 
   for (;;) {
-    epoll_ret = epoll_wait(srv->epoll_fd, events, 64, -1);
+    epoll_ret = epoll_wait(srv->epoll_fd, events, WEBS_MAX_EVENTS, WEBS_POLL_TIMEOUT);
 
     if (epoll_ret == 0) continue;
 
