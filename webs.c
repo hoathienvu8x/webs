@@ -900,6 +900,13 @@ static int __webs_accept_connection(webs_server *_srv, webs_client** _c) {
 
   client_id_counter++;
 
+  c->srv = _srv;
+
+  pthread_mutex_lock(&_srv->mtx);
+  __webs_add_client(_srv, c);
+  pthread_mutex_unlock(&_srv->mtx);
+  __webs_set_client_state(c, WS_STATE_CONNECTING);
+
   *_c = c;
   return fd;
 }
@@ -1210,13 +1217,6 @@ static void* __webs_main(void* _srv) {
       if (events[i].data.fd == srv->soc) {
         if (__webs_accept_connection(srv, &user_ptr) < 0)
           break;
-
-        user_ptr->srv = srv;
-
-        pthread_mutex_lock(&srv->mtx);
-        __webs_add_client(srv, user_ptr);
-        pthread_mutex_unlock(&srv->mtx);
-        __webs_set_client_state(user_ptr, WS_STATE_CONNECTING);
 
         continue;
       }
