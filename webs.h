@@ -93,7 +93,6 @@ struct webs_server {
   size_t id;
   int soc;
   void * data;
-  pthread_t periodic;
   pthread_mutex_t mtx;
   int interval;
   int epoll_fd;

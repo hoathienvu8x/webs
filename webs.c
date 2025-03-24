@@ -936,7 +936,7 @@ static void __webs_client_main(void* _self) {
   ssize_t error = 0;
 
   /* flag set if frame is a continuation one */
-  int cont = 0;
+  int cont = 0, __opcode = WS_FR_OP_CONT;
 
   /* general-purpose recv/send buffer */
   struct webs_buffer soc_buffer;
@@ -1011,6 +1011,9 @@ static void __webs_client_main(void* _self) {
       (*self->srv->events.on_open)(self);
 
   }
+
+  if (__webs_get_client_state(self) != WS_STATE_OPEN) return;
+
   /* main loop */
   for (;;) {
     if (__webs_parse_frame(self, &frm) < 0) {
@@ -1020,13 +1023,14 @@ static void __webs_client_main(void* _self) {
 
     if (__webs_get_client_state(self) != WS_STATE_OPEN) break;
 
+    __opcode = WEBSFR_GET_OPCODE(frm.info);
+
     /* only accept supported frames */
-    if (WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_CONT
-     && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_TXT
-     && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_BIN
-     && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_CLSE
-     && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_PING
-     && WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_PONG) {
+    if (
+      __opcode != WS_FR_OP_CONT && __opcode != WS_FR_OP_TXT &&
+      __opcode != WS_FR_OP_BIN && __opcode != WS_FR_OP_CLSE && 
+      __opcode != WS_FR_OP_PING && __opcode != WS_FR_OP_PONG
+    ) {
       if (*self->srv->events.on_error)
         (*self->srv->events.on_error)(self, WEBS_ERR_NO_SUPPORT);
 
@@ -1046,7 +1050,7 @@ static void __webs_client_main(void* _self) {
     }
 
     /* respond to ping */
-    if (WEBSFR_GET_OPCODE(frm.info) == WS_FR_OP_PING) {
+    if (__opcode == WS_FR_OP_PING) {
       __webs_flush(self, frm.off + frm.length - 2);
 
       if (*self->srv->events.on_ping)
@@ -1060,7 +1064,7 @@ static void __webs_client_main(void* _self) {
     }
 
     /* handle pong */
-    if (WEBSFR_GET_OPCODE(frm.info) == WS_FR_OP_PONG) {
+    if (__opcode == WS_FR_OP_PONG) {
       __webs_flush(self, frm.off + frm.length - 2);
 
       if (*self->srv->events.on_pong)
@@ -1071,7 +1075,7 @@ static void __webs_client_main(void* _self) {
     }
 
     /* deal with normal frames (non-fragmented) */
-    if (WEBSFR_GET_OPCODE(frm.info) != WS_FR_OP_CONT) {
+    if (__opcode != WS_FR_OP_CONT) {
       /* read data */
       __webs_dispose(data);
       data = __webs_malloc(frm.length + 1);
@@ -1135,7 +1139,7 @@ static void __webs_client_main(void* _self) {
     }
 
     /* respond to close */
-    if (WEBSFR_GET_OPCODE(frm.info) == WS_FR_OP_CLSE) {
+    if (__opcode == WS_FR_OP_CLSE) {
       error = 0;
       break;
     }
@@ -1155,9 +1159,7 @@ static void __webs_client_main(void* _self) {
       }
       #endif
       if (*self->srv->events.on_data)
-        (*self->srv->events.on_data)(
-          self, WEBSFR_GET_OPCODE(frm.info), data, total
-        );
+        (*self->srv->events.on_data)(self, __opcode, data, total);
     }
 
     __webs_dispose(data);
@@ -1177,7 +1179,11 @@ static void __webs_client_main(void* _self) {
 }
 
 static void * __webs_periodic(void * _srv) {
-  webs_server * srv = (webs_server*) _srv;
+  webs_server * srv;
+
+  pthread_detach(pthread_self());
+
+  srv = (webs_server*) _srv;
   if (!srv) return NULL;
   if (!(*srv->events.on_periodic) || srv->interval <= 0) return NULL;
   for (;;) {
@@ -1198,13 +1204,16 @@ static void* __webs_main(void* _srv) {
   int i, epoll_ret;
   struct epoll_event events[WEBS_MAX_EVENTS];
   webs_client *node = NULL;
+  pthread_t periodic;
 
   if (!srv) return NULL;
 
-  pthread_create(&srv->periodic, 0, __webs_periodic, srv);
+  pthread_create(&periodic, 0, __webs_periodic, srv);
 
   for (;;) {
-    epoll_ret = epoll_wait(srv->epoll_fd, events, WEBS_MAX_EVENTS, WEBS_POLL_TIMEOUT);
+    epoll_ret = epoll_wait(
+      srv->epoll_fd, events, WEBS_MAX_EVENTS, WEBS_POLL_TIMEOUT
+    );
 
     if (epoll_ret == 0) continue;
 
@@ -1214,15 +1223,15 @@ static void* __webs_main(void* _srv) {
     }
 
     for (i = 0; i < epoll_ret; i++) {
+      if (events[i].events & (EPOLLERR | EPOLLHUP)) {
+        __webs_close_handle(events[i].data.fd);
+        continue;
+      }
+
       if (events[i].data.fd == srv->soc) {
         if (__webs_accept_connection(srv, &user_ptr) < 0)
           break;
 
-        continue;
-      }
-
-      if (events[i].events & (EPOLLERR | EPOLLHUP)) {
-        __webs_close_handle(events[i].data.fd);
         continue;
       }
 
@@ -1238,10 +1247,6 @@ static void* __webs_main(void* _srv) {
 
       __webs_client_main(node);
     }
-  }
-
-  if (srv->periodic) {
-    pthread_join(srv->periodic, 0);
   }
 
   return NULL;
@@ -1282,10 +1287,6 @@ void webs_close(webs_server* _srv) {
   if (!_srv) return;
 
   node = _srv->head;
-
-  if (_srv->periodic) {
-    pthread_join(_srv->periodic, 0);
-  }
 
   if (_srv->thread) {
     pthread_join(_srv->thread, 0);
