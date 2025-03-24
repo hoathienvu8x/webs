@@ -861,6 +861,17 @@ static int __webs_accept_connection(webs_server *_srv, webs_client** _c) {
     return -1;
   }
 
+  pthread_mutex_lock(&_srv->mtx);
+  c = _srv->head;
+  while (c != NULL) {
+    if (c->fd == fd) {
+      pthread_mutex_unlock(&_srv->mtx);
+      return 0;
+    }
+    c = c->next;
+  }
+  pthread_mutex_unlock(&_srv->mtx);
+
   if (__webs_set_non_blocking(fd)) {
     __webs_close_handle(fd);
     return 0;
