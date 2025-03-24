@@ -931,7 +931,7 @@ static int __webs_recv_payload(webs_client *self, char *data, ssize_t length) {
  * connected client.
  * @param _self: the client who is calling.
  */
-static void __webs_client_main(void* _self) {
+static void __webs_client_main(void* _self, uint32_t flags) {
   webs_client* self = (webs_client*) _self;
   ssize_t total = 0, _n = -1;
   ssize_t error = 0;
@@ -958,6 +958,8 @@ static void __webs_client_main(void* _self) {
   __webs_bzero(&frm, sizeof(frm));
 
   if (!self) return;
+
+  if (flags & (EPOLLERR | EPOLLHUP)) goto ABORT;
 
   if (__webs_get_client_state(self) == WS_STATE_CONNECTING) {
     /* wait for HTTP websocket request header */
@@ -1224,11 +1226,6 @@ static void* __webs_main(void* _srv) {
     }
 
     for (i = 0; i < epoll_ret; i++) {
-      if (events[i].events & (EPOLLERR | EPOLLHUP)) {
-        __webs_close_handle(events[i].data.fd);
-        continue;
-      }
-
       if (events[i].data.fd == srv->soc) {
         if (__webs_accept_connection(srv, &user_ptr) < 0)
           break;
@@ -1246,7 +1243,13 @@ static void* __webs_main(void* _srv) {
       }
       pthread_mutex_unlock(&srv->mtx);
 
-      __webs_client_main(node);
+      __webs_client_main(node, events[i].events);
+      if (node == NULL) {
+        if (events[i].events & (EPOLLERR | EPOLLHUP)) {
+          __webs_close_handle(events[i].data.fd);
+          continue;
+        }
+      }
     }
   }
 
