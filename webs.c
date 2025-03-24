@@ -887,6 +887,7 @@ static int __webs_accept_connection(webs_server *_srv, webs_client** _c) {
   }
 
   if (pthread_mutex_init(&c->mtx_snd, NULL)) {
+    pthread_mutex_destroy(&c->mtx_sta);
     __webs_close_handle(fd);
     WEBS_XERR("Failed to allocate send mutex!", ENOMEM);
     return 0;
@@ -901,11 +902,11 @@ static int __webs_accept_connection(webs_server *_srv, webs_client** _c) {
   client_id_counter++;
 
   c->srv = _srv;
+  __webs_set_client_state(c, WS_STATE_CONNECTING);
 
   pthread_mutex_lock(&_srv->mtx);
   __webs_add_client(_srv, c);
   pthread_mutex_unlock(&_srv->mtx);
-  __webs_set_client_state(c, WS_STATE_CONNECTING);
 
   *_c = c;
   return fd;
