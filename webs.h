@@ -97,7 +97,6 @@ struct webs_server {
   pthread_t periodic;
   pthread_mutex_t mtx;
   int interval;
-  int is_stop;
 };
 
 /**
