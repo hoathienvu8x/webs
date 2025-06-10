@@ -1148,9 +1148,11 @@ void webs_eject(webs_client* _self) {
 
   __webs_close_socket(_self->fd);
 
+  pthread_mutex_lock(&_self->srv->mtx);
   pthread_cancel(_self->thread);
 
   __webs_remove_client(_self);
+  pthread_mutex_unlock(&_self->srv->mtx);
 }
 
 void webs_close(webs_server* _srv) {
@@ -1171,13 +1173,13 @@ void webs_close(webs_server* _srv) {
 
   __webs_close_socket(_srv->soc);
 
-  pthread_mutex_destroy(&_srv->mtx);
 
   while (node) {
     temp = node->next;
     webs_eject(node);
     node = temp;
   }
+  pthread_mutex_destroy(&_srv->mtx);
 
   __webs_dispose(_srv);
 }
